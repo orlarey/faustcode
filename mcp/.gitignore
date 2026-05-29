@@ -1,0 +1,11 @@
+# Local builds (binaries at the root of mcp/)
+# Leading slash anchors the pattern so the cmd/e2e-probe/ source dir is not ignored.
+/faustcode-mcp
+/faustcode-mcp-*
+/e2e-probe
+
+# tools.json is the contract — single source of truth lives at the repo
+# root. The copy under mcp/ is reproduced by `make sync-contract` (or
+# `cp ../tools.json tools.json`) before each build so //go:embed can pick
+# it up. Never edit the local copy by hand.
+/tools.json

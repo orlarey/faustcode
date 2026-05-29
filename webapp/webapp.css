@@ -1,0 +1,324 @@
+/* webapp.css — overlay on top of public/style.css.
+ *
+ * The faustcode webapp re-uses public/style.css verbatim for the
+ * header, view container, audio-gate, primary-btn, icon-btn, etc.
+ * This file only styles the faustcode-only addons :
+ *
+ *   - the single MCP pill in the header (status colour + click target)
+ *   - the right-side MCP drawer that opens from it (Connect, WS URL,
+ *     Setup steps, Activity log)
+ *
+ * Everything else (per-view layout, dsp editor, faust UI, etc.) is
+ * provided by the original public/style.css through `style.css` (a
+ * symlink to ../public/style.css).
+ */
+
+/* --- header MCP pill --------------------------------------------- */
+
+.mcp-pill {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.18rem 0.65rem;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.72rem; font-weight: 500;
+  letter-spacing: 0.04em;
+  border-radius: var(--ui-radius-pill);
+  border: 1px solid var(--ui-accent-border-faint);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ui-text-secondary);
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+.mcp-pill:hover  { background: rgba(255, 255, 255, 0.05); }
+.mcp-pill:focus  { outline: none; box-shadow: var(--ui-focus-shadow); }
+.mcp-pill-label  { white-space: nowrap; }
+.mcp-pill-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--ui-text-secondary);
+  box-shadow: 0 0 0 0 transparent;
+  transition: background 0.18s ease, box-shadow 0.18s ease;
+}
+
+/* status → colour mapping (both the header pill and the drawer dot use
+ * the same .is-* classes) */
+.mcp-pill.is-idle           { color: var(--ui-text-secondary); }
+.mcp-pill.is-idle .mcp-pill-dot           { background: #8a9aa3; }
+
+.mcp-pill.is-connecting     { color: #ffd1a3; background: rgba(255, 165, 80, 0.10); border-color: rgba(255, 165, 80, 0.40); }
+.mcp-pill.is-connecting .mcp-pill-dot     { background: #ffb45e; box-shadow: 0 0 6px rgba(255, 180, 94, 0.55); }
+
+.mcp-pill.is-ok             { color: #c8ffd9; background: rgba(80, 200, 140, 0.16); border-color: rgba(80, 200, 140, 0.45); }
+.mcp-pill.is-ok .mcp-pill-dot             { background: #4ed27a; box-shadow: 0 0 6px rgba(78, 210, 122, 0.55); }
+
+.mcp-pill.is-error          { color: #ffb0b0; background: rgba(255, 80, 80, 0.18); border-color: rgba(255, 80, 80, 0.50); }
+.mcp-pill.is-error .mcp-pill-dot          { background: #ff6b6b; box-shadow: 0 0 6px rgba(255, 107, 107, 0.55); }
+
+/* Drawer dot mirrors the same scheme by re-using .is-* classes on the
+ * dot element directly. */
+.mcp-pill-dot.is-idle        { background: #8a9aa3; }
+.mcp-pill-dot.is-connecting  { background: #ffb45e; box-shadow: 0 0 6px rgba(255, 180, 94, 0.55); }
+.mcp-pill-dot.is-ok          { background: #4ed27a; box-shadow: 0 0 6px rgba(78, 210, 122, 0.55); }
+.mcp-pill-dot.is-error       { background: #ff6b6b; box-shadow: 0 0 6px rgba(255, 107, 107, 0.55); }
+
+/* Activity flash : on every incoming request / outgoing response while
+ * connected, the dot pulses bright green for ~150 ms.
+ *
+ * We bind the animation to a .flash modifier ; boot.js
+ * adds/removes it via a setTimeout. Animation is keyed off the dot,
+ * not the whole pill, to stay subtle. */
+@keyframes mcp-pill-flash {
+  0%   { background: #4ed27a; box-shadow: 0 0 6px rgba(78, 210, 122, 0.55); }
+  20%  { background: #b6ffcb; box-shadow: 0 0 14px rgba(182, 255, 203, 0.95); }
+  100% { background: #4ed27a; box-shadow: 0 0 6px rgba(78, 210, 122, 0.55); }
+}
+.mcp-pill.is-ok.flash .mcp-pill-dot {
+  animation: mcp-pill-flash 220ms ease-out;
+}
+
+/* --- right-side drawer ------------------------------------------- */
+
+.mcp-drawer {
+  position: fixed;
+  /* Slip below the fixed page header (z-index 100, height
+   * --ui-toolbar-height) so the MCP pill stays visible — the user can
+   * click it again to close, or just see status while the drawer is
+   * open. */
+  top: var(--ui-toolbar-height);
+  right: 0; bottom: 0;
+  width: min(440px, 92vw);
+  z-index: 90;
+  display: flex; flex-direction: column;
+  background: var(--ui-header-glass);
+  border-left: 1px solid var(--ui-accent-border-strong);
+  box-shadow: -16px 0 40px rgba(0, 0, 0, 0.55);
+  transform: translateX(100%);
+  transition: transform 0.22s ease-out;
+  color: var(--ui-text-primary);
+}
+.mcp-drawer:not(.hidden) { transform: translateX(0); }
+
+.mcp-drawer-backdrop {
+  position: fixed;
+  top: var(--ui-toolbar-height); right: 0; bottom: 0; left: 0;
+  z-index: 89;
+  background: rgba(0, 0, 0, 0.40);
+  backdrop-filter: blur(2px);
+  transition: opacity 0.22s ease-out;
+}
+.mcp-drawer-backdrop.hidden { opacity: 0; pointer-events: none; }
+
+.mcp-drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border-bottom: 1px solid var(--ui-accent-border-faint);
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.78rem;
+}
+.mcp-drawer-status {
+  display: inline-flex; align-items: center; gap: 0.55rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ui-text-pill);
+}
+.mcp-drawer-status .mcp-pill-dot { width: 9px; height: 9px; }
+
+.mcp-drawer-section {
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border-bottom: 1px solid var(--ui-accent-border-faint);
+  display: flex; flex-direction: column; gap: var(--ui-space-2);
+}
+.mcp-drawer-section:last-child { border-bottom: none; }
+.mcp-drawer-section h3 {
+  margin: 0 0 var(--ui-space-1) 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-text-pill);
+}
+.mcp-drawer-section h4 {
+  margin: 0 0 4px 0;
+  font-size: 0.78rem;
+  color: var(--ui-text-pill);
+}
+
+.mcp-drawer-actions {
+  display: flex; gap: var(--ui-space-2);
+}
+.mcp-drawer-field {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 0.72rem; color: var(--ui-text-secondary);
+}
+.mcp-drawer-field input[type="text"] {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.74rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid var(--ui-accent-border-faint);
+  background: var(--ui-value-bg);
+  color: var(--ui-text-value);
+}
+.mcp-drawer-field input:focus { outline: none; box-shadow: var(--ui-focus-shadow); }
+
+.setup-steps {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: var(--ui-space-3);
+}
+.setup-steps li {
+  border-left: 2px solid var(--ui-accent-border-strong);
+  padding-left: var(--ui-space-3);
+}
+.setup-steps p {
+  margin: 4px 0;
+  font-size: 0.76rem;
+  color: var(--ui-text-secondary);
+}
+.setup-steps a { color: var(--ui-text-pill); }
+.setup-os-note { font-style: italic; opacity: 0.85; }
+ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem; }
+
+.ff-cmd {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.7rem;
+  padding: var(--ui-space-2) var(--ui-space-3);
+  border-radius: 6px;
+  background: var(--ui-value-bg);
+  border: 1px solid var(--ui-accent-border-faint);
+  color: var(--ui-text-value);
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.ff-dialog-close {
+  background: transparent; border: none; cursor: pointer;
+  padding: 0 var(--ui-space-1);
+  font-size: 1.2rem;
+  color: var(--ui-text-secondary);
+}
+.ff-dialog-close:hover { color: var(--ui-text-pill); }
+
+/* Activity log section : fixed-height scroll, fills the rest of the
+ * drawer. Marked via a dedicated class so flex-grow doesn't fight the
+ * other sections. */
+.mcp-drawer-log-section {
+  flex: 1; min-height: 0;
+}
+#mcp-log {
+  flex: 1;
+  overflow: auto;
+  padding: var(--ui-space-2);
+  border-radius: var(--ui-radius-panel);
+  background: var(--ui-value-bg);
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.7rem; line-height: 1.5;
+}
+#mcp-log .log-row { padding: 2px 0; border-bottom: 1px dotted rgba(255, 255, 255, 0.04); }
+#mcp-log .log-row.req  { color: #b6d0ff; }
+#mcp-log .log-row.resp { color: #b0f0c0; }
+#mcp-log .log-row.warn { color: #ffd1a3; }
+#mcp-log .log-row.err  { color: #ffb0b0; }
+#mcp-log .log-row .ts  { opacity: 0.55; margin-right: 4px; }
+
+.hidden { display: none !important; }
+
+/* --- Floating DSP code editor (overlay above the current view) --- */
+
+.floating-editor {
+  position: fixed;
+  z-index: 95;       /* above views, below MCP drawer (90 is drawer) */
+  display: flex;
+  flex-direction: column;
+  background: var(--ui-header-glass);
+  border: 1px solid var(--ui-accent-border-strong);
+  border-radius: 10px;
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  color: var(--ui-text-primary);
+  overflow: hidden;
+  min-width: 280px;
+  min-height: 180px;
+  backdrop-filter: blur(10px);
+}
+.floating-editor.is-moving { cursor: grabbing; user-select: none; }
+.floating-editor.is-resizing { user-select: none; }
+
+.floating-editor-titlebar {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.35rem 0.6rem;
+  cursor: grab;
+  background: var(--ui-header-glass-soft);
+  border-bottom: 1px solid var(--ui-accent-border-faint);
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.72rem;
+  user-select: none;
+}
+.floating-editor-titlebar:active { cursor: grabbing; }
+
+.floating-editor-title {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-text-title);
+}
+.floating-editor-title.is-dirty {
+  color: #ffd479;
+  text-shadow: 0 1px 8px rgba(255, 212, 121, 0.4);
+}
+
+.floating-editor-filename {
+  color: var(--ui-text-secondary);
+  opacity: 0.85;
+  font-size: 0.7rem;
+}
+
+.floating-editor-spacer { flex: 1; }
+
+.floating-editor-submit:not(:disabled) {
+  background: rgba(80, 200, 140, 0.18);
+  color: #c8ffd9;
+  border-color: rgba(80, 200, 140, 0.55);
+}
+.floating-editor-submit:not(:disabled):hover {
+  background: rgba(80, 200, 140, 0.28);
+}
+
+.floating-editor-host {
+  flex: 1;
+  min-height: 0;
+  background: #0d1118;
+}
+.floating-editor-host .cm-editor {
+  height: 100%;
+  background: #0d1118;
+}
+.floating-editor-host .cm-editor.cm-focused { outline: none; }
+.floating-editor-host .cm-gutters {
+  background: #0d1118;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.30);
+}
+.floating-editor-host .cm-activeLineGutter,
+.floating-editor-host .cm-activeLine {
+  background: rgba(255, 255, 255, 0.025);
+}
+.floating-editor-host .cm-content { caret-color: #80ffd0; }
+.floating-editor-host .cm-cursor   { border-left-color: #80ffd0; }
+.floating-editor-host .cm-selectionBackground,
+.floating-editor-host .cm-focused .cm-selectionBackground {
+  background-color: rgba(128, 255, 208, 0.18) !important;
+}
+
+.floating-editor-resize {
+  position: absolute;
+  right: 0; bottom: 0;
+  width: 14px; height: 14px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(135deg,
+      transparent 0%, transparent 50%,
+      rgba(255, 255, 255, 0.18) 50%, rgba(255, 255, 255, 0.18) 60%,
+      transparent 60%, transparent 72%,
+      rgba(255, 255, 255, 0.18) 72%, rgba(255, 255, 255, 0.18) 82%,
+      transparent 82%);
+}

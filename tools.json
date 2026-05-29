@@ -1,0 +1,881 @@
+{
+  "contractVersion": "0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$|^live-[0-9a-f]+$",
+      "description": "Static session SHA-1 (40 hex chars) or live session id (live-<hash>)."
+    },
+    "View": {
+      "type": "string",
+      "enum": ["dsp", "svg", "run", "signals", "tasks"],
+      "description": "Active view. The 'cpp' view of the Docker version is out of scope in standalone (cf. SPECIFICATION-STANDALONE.md §Hors-périmètre)."
+    },
+    "SessionMeta": {
+      "type": "object",
+      "properties": {
+        "sha1": { "$ref": "#/$defs/Sha1" },
+        "filename": { "type": "string" },
+        "kind": { "type": "string", "enum": ["static", "live"] },
+        "compilation_time": { "type": "number" },
+        "last_used_time": { "type": "number" },
+        "usage_score": { "type": "number" }
+      },
+      "required": ["sha1", "filename"],
+      "additionalProperties": true
+    },
+    "SpectrumSummary": {
+      "type": "object",
+      "description": "Compact spectrum representation, version 1 (cf. SPECIFICATION_SPECTRUM.md).",
+      "properties": {
+        "type": { "const": "spectrum_summary_v1" },
+        "capturedAt": { "type": "number" },
+        "frame": {
+          "type": "object",
+          "properties": {
+            "sampleRate": { "type": "number" },
+            "fftSize": { "type": "number" },
+            "fmin": { "type": "number" },
+            "fmax": { "type": "number" },
+            "floorDb": { "type": "number" },
+            "bandsCount": { "type": "number" }
+          }
+        },
+        "bandsDbQ": { "type": "array", "items": { "type": "number" } },
+        "peaks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "hz": { "type": "number" },
+              "dbQ": { "type": "number" },
+              "q": { "type": "number" }
+            }
+          }
+        },
+        "features": {
+          "type": "object",
+          "properties": {
+            "rmsDbQ": { "type": "number" },
+            "centroidHz": { "type": "number" },
+            "rolloff95Hz": { "type": "number" },
+            "flatnessQ": { "type": "number" },
+            "crestDbQ": { "type": "number" }
+          }
+        },
+        "audioQuality": {
+          "type": "object",
+          "properties": {
+            "peakDbFSQ": { "type": "number" },
+            "clipSampleCount": { "type": "number" },
+            "clipRatioQ": { "type": "number" },
+            "dcOffsetQ": { "type": "number" },
+            "clickCount": { "type": "number" },
+            "clickScoreQ": { "type": "number" }
+          }
+        },
+        "delta": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "SpectrumSeries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "tMs": { "type": "number" },
+          "summary": { "$ref": "#/$defs/SpectrumSummary" }
+        },
+        "required": ["tMs", "summary"]
+      }
+    },
+    "SpectrumAggregate": {
+      "type": "object",
+      "properties": {
+        "mode": { "const": "max_hold" },
+        "summary": { "$ref": "#/$defs/SpectrumSummary" }
+      },
+      "required": ["mode", "summary"]
+    },
+    "FaustSymbolSummary": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "qualifiedName": { "type": "string" },
+        "summary": { "type": "string" },
+        "usage": { "type": "string" },
+        "source": {
+          "type": "object",
+          "properties": {
+            "file": { "type": "string" },
+            "line": { "type": "number" }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "FaustUI": {
+      "description": "Faust UI JSON tree (groups, sliders, buttons). Shape mirrors the official Faust UI descriptor.",
+      "type": "array"
+    },
+    "RunMidiEvent": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["on", "off", "pulse"] },
+        "note": { "type": "integer", "minimum": 0, "maximum": 127 },
+        "velocity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "holdMs": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "nonce": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "RunTransportEvent": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["start", "stop", "toggle"] },
+        "nonce": { "type": "number" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "tools": [
+    {
+      "name": "get_onboarding_guide",
+      "description": "Return best-practice workflow and thresholds so an AI client can operate Faustforge autonomously.",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "goals": { "type": "array", "items": { "type": "string" } },
+          "prerequisites": { "type": "array", "items": { "type": "string" } },
+          "workflow": { "type": "array" },
+          "toolHints": { "type": "object" },
+          "qualityThresholds": { "type": "object" },
+          "policy": { "type": "array", "items": { "type": "string" } },
+          "libraryDiscovery": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+
+    {
+      "name": "search_faust_lib",
+      "description": "Search Faust library symbols by text query (name, qualified name, summary, file).",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "module": { "type": "string" }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "module": { "type": ["string", "null"] },
+          "results": { "type": "array", "items": { "$ref": "#/$defs/FaustSymbolSummary" } }
+        },
+        "required": ["query", "results"]
+      }
+    },
+    {
+      "name": "get_faust_symbol",
+      "description": "Get full documentation for a Faust symbol (usage, params, io, test snippet, source).",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "symbol": { "type": "string" } },
+        "required": ["symbol"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "object" },
+          "alternatives": { "type": "array", "items": { "$ref": "#/$defs/FaustSymbolSummary" } }
+        },
+        "required": ["symbol", "alternatives"]
+      }
+    },
+    {
+      "name": "list_faust_module",
+      "description": "List symbols from one Faust library module (e.g. delays, filters, oscillators).",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "module": { "type": "string" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 500 }
+        },
+        "required": ["module"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "module": { "type": "string" },
+          "file": { "type": "string" },
+          "aliasHints": { "type": "array", "items": { "type": "string" } },
+          "symbols": { "type": "array", "items": { "$ref": "#/$defs/FaustSymbolSummary" } }
+        }
+      }
+    },
+    {
+      "name": "get_faust_examples",
+      "description": "Get example/test snippets from Faust docs for a symbol or a module.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbolOrModule": { "type": "string" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
+        },
+        "required": ["symbolOrModule"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": { "type": "string", "enum": ["symbol", "module"] },
+          "query": { "type": "string" },
+          "file": { "type": "string" },
+          "examples": { "type": "array" }
+        }
+      }
+    },
+    {
+      "name": "explain_faust_symbol_for_goal",
+      "description": "Return action-oriented explanation for a DSP goal using a given symbol.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "goal": { "type": "string" }
+        },
+        "required": ["symbol", "goal"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "goal": { "type": "string" },
+          "recommendation": { "type": "string" }
+        },
+        "required": ["symbol", "goal", "recommendation"]
+      }
+    },
+
+    {
+      "name": "submit",
+      "description": "Submit Faust code (equivalent to dropping a .dsp file). If persisted, it becomes the active shared session.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "filename": { "type": "string", "pattern": "\\.dsp$" },
+          "persistOnSuccessOnly": { "type": "boolean", "default": true }
+        },
+        "required": ["code"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "errors": { "type": "string" },
+          "persisted": { "type": "boolean" },
+          "persistOnSuccessOnly": { "type": "boolean" }
+        },
+        "required": ["sha1", "errors", "persisted"]
+      }
+    },
+    {
+      "name": "get_errors",
+      "description": "Get errors.log for a given session.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "sha1": { "$ref": "#/$defs/Sha1" } },
+        "required": ["sha1"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "errors": { "type": "string" }
+        },
+        "required": ["sha1", "errors"]
+      }
+    },
+    {
+      "name": "get_state",
+      "description": "Get current session and view state.",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "anyOf": [{ "$ref": "#/$defs/Sha1" }, { "type": "null" }] },
+          "filename": { "type": ["string", "null"] },
+          "view": { "$ref": "#/$defs/View" }
+        }
+      }
+    },
+    {
+      "name": "get_session",
+      "description": "Get current session (sha1 + filename, no view).",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "anyOf": [{ "$ref": "#/$defs/Sha1" }, { "type": "null" }] },
+          "filename": { "type": ["string", "null"] }
+        }
+      }
+    },
+    {
+      "name": "list_sessions",
+      "description": "List sessions (creation order).",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sessions": { "type": "array", "items": { "$ref": "#/$defs/SessionMeta" } }
+        },
+        "required": ["sessions"]
+      }
+    },
+    {
+      "name": "set_session",
+      "description": "Set current session by sha1.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "sha1": { "$ref": "#/$defs/Sha1" } },
+        "required": ["sha1"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "filename": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "prev_session",
+      "description": "Move to previous session (creation order).",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "anyOf": [{ "$ref": "#/$defs/Sha1" }, { "type": "null" }] },
+          "filename": { "type": ["string", "null"] }
+        }
+      }
+    },
+    {
+      "name": "next_session",
+      "description": "Move to next session (creation order) or empty.",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "anyOf": [{ "$ref": "#/$defs/Sha1" }, { "type": "null" }] },
+          "filename": { "type": ["string", "null"] }
+        }
+      }
+    },
+
+    {
+      "name": "set_view",
+      "description": "Set current view. Note: 'cpp' has been removed in the standalone version.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "view": { "$ref": "#/$defs/View" } },
+        "required": ["view"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": { "view": { "$ref": "#/$defs/View" } },
+        "required": ["view"]
+      }
+    },
+    {
+      "name": "get_view_content",
+      "description": "Get content corresponding to the current view. For view=run, returns the latest spectrum summary.",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "view": { "$ref": "#/$defs/View" },
+          "mime": { "type": "string" },
+          "content": {}
+        },
+        "required": ["view", "mime", "content"]
+      }
+    },
+    {
+      "name": "get_spectrum",
+      "description": "Get latest spectrum summary (independent of current view). May include audioQuality feedback.",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "mime": { "const": "application/json" },
+          "content": { "$ref": "#/$defs/SpectrumSummary" }
+        },
+        "required": ["mime", "content"]
+      }
+    },
+
+    {
+      "name": "get_run_ui",
+      "description": "Get current run UI structure (Faust UI JSON). Use returned parameter paths with set_run_param.",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "ui": { "$ref": "#/$defs/FaustUI" }
+        },
+        "required": ["sha1", "ui"]
+      }
+    },
+    {
+      "name": "get_run_params",
+      "description": "Get current run parameter values by path.",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "params": { "type": "object", "additionalProperties": { "type": "number" } }
+        },
+        "required": ["sha1", "params"]
+      }
+    },
+    {
+      "name": "set_run_param",
+      "description": "Set one run parameter by path. For buttons, requires a full press/release cycle; prefer trigger_button.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "pattern": "^/" },
+          "value": { "type": "number" }
+        },
+        "required": ["path", "value"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "path": { "type": "string" },
+          "value": { "type": "number" }
+        },
+        "required": ["sha1", "path", "value"]
+      }
+    },
+    {
+      "name": "trigger_button",
+      "description": "Trigger a Faust button parameter safely with a full press/release cycle (1 then 0).",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "pattern": "^/" },
+          "holdMs": { "type": "integer", "minimum": 1, "maximum": 5000 }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "holdMs": { "type": "integer" },
+          "triggered": { "type": "boolean" }
+        }
+      }
+    },
+
+    {
+      "name": "get_polyphony",
+      "description": "Get current polyphony voices for Run mode (0 = mono).",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "voices": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "name": "set_polyphony",
+      "description": "Set Run polyphony voices. Convention: 0 = mono. Allowed: 0,1,2,4,8,16,32,64.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "voices": { "type": "integer", "enum": [0, 1, 2, 4, 8, 16, 32, 64] }
+        },
+        "required": ["voices"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "voices": { "type": "integer" }
+        }
+      }
+    },
+
+    {
+      "name": "run_audio",
+      "description": "Control run audio state: on, off, or toggle. on/toggle require audio unlocked by one UI click.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "state": { "type": "string", "enum": ["on", "off", "toggle"] } },
+        "required": ["state"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "runTransport": { "$ref": "#/$defs/RunTransportEvent" },
+          "state": { "type": "string", "enum": ["on", "off", "toggle"] }
+        }
+      }
+    },
+    {
+      "name": "run_transport",
+      "description": "Legacy alias of run_audio. Control run transport: start, stop, or toggle.",
+      "stability": "deprecated",
+      "deprecated": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": { "action": { "type": "string", "enum": ["start", "stop", "toggle"] } },
+        "required": ["action"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "runTransport": { "$ref": "#/$defs/RunTransportEvent" }
+        }
+      }
+    },
+
+    {
+      "name": "midi_note_on",
+      "description": "Send MIDI note-on to Run engine. Polyphonic DSP usually required.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "note": { "type": "integer", "minimum": 0, "maximum": 127 },
+          "velocity": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "midi": { "$ref": "#/$defs/RunMidiEvent" },
+          "sent": {
+            "type": "object",
+            "properties": {
+              "action": { "const": "on" },
+              "note": { "type": "integer" },
+              "velocity": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "midi_note_off",
+      "description": "Send MIDI note-off to Run engine.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "note": { "type": "integer", "minimum": 0, "maximum": 127 }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "midi": { "$ref": "#/$defs/RunMidiEvent" },
+          "sent": {
+            "type": "object",
+            "properties": {
+              "action": { "const": "off" },
+              "note": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "midi_note_pulse",
+      "description": "Send MIDI note-on then note-off automatically after holdMs.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "note": { "type": "integer", "minimum": 0, "maximum": 127 },
+          "velocity": { "type": "number", "minimum": 0, "maximum": 1 },
+          "holdMs": { "type": "integer", "minimum": 1, "maximum": 5000 }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "midi": { "$ref": "#/$defs/RunMidiEvent" },
+          "sent": {
+            "type": "object",
+            "properties": {
+              "action": { "const": "pulse" },
+              "note": { "type": "integer" },
+              "velocity": { "type": "number" },
+              "holdMs": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+
+    {
+      "name": "set_run_param_and_get_spectrum",
+      "description": "Set one run parameter, wait briefly, then capture a compact spectrum series + max-hold aggregate.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "pattern": "^/" },
+          "value": { "type": "number" },
+          "settleMs": { "type": "integer", "minimum": 0, "maximum": 5000 },
+          "captureMs": { "type": "integer", "minimum": 50, "maximum": 10000 },
+          "sampleEveryMs": { "type": "integer", "minimum": 40, "maximum": 500 },
+          "maxFrames": { "type": "integer", "minimum": 1, "maximum": 20 }
+        },
+        "required": ["path", "value"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "value": { "type": "number" },
+          "settleMs": { "type": "integer" },
+          "captureMs": { "type": "integer" },
+          "sampleEveryMs": { "type": "integer" },
+          "series": { "$ref": "#/$defs/SpectrumSeries" },
+          "aggregate": { "$ref": "#/$defs/SpectrumAggregate" }
+        }
+      }
+    },
+    {
+      "name": "trigger_button_and_get_spectrum",
+      "description": "Trigger a button and capture a time series of compact spectrum summaries + max-hold aggregate. For transient/percussive analysis.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "pattern": "^/" },
+          "holdMs": { "type": "integer", "minimum": 1, "maximum": 5000 },
+          "captureMs": { "type": "integer", "minimum": 50, "maximum": 10000 },
+          "sampleEveryMs": { "type": "integer", "minimum": 40, "maximum": 500 },
+          "maxFrames": { "type": "integer", "minimum": 1, "maximum": 20 }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "holdMs": { "type": "integer" },
+          "captureMs": { "type": "integer" },
+          "sampleEveryMs": { "type": "integer" },
+          "series": { "$ref": "#/$defs/SpectrumSeries" },
+          "aggregate": { "$ref": "#/$defs/SpectrumAggregate" }
+        }
+      }
+    },
+    {
+      "name": "midi_note_on_and_get_spectrum",
+      "description": "Send MIDI note-on, wait briefly, then capture a compact spectrum-summary series + max-hold aggregate.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "note": { "type": "integer", "minimum": 0, "maximum": 127 },
+          "velocity": { "type": "number", "minimum": 0, "maximum": 1 },
+          "settleMs": { "type": "integer", "minimum": 0, "maximum": 5000 },
+          "captureMs": { "type": "integer", "minimum": 50, "maximum": 10000 },
+          "sampleEveryMs": { "type": "integer", "minimum": 40, "maximum": 500 },
+          "maxFrames": { "type": "integer", "minimum": 1, "maximum": 20 }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sent": {
+            "type": "object",
+            "properties": {
+              "action": { "const": "on" },
+              "note": { "type": "integer" },
+              "velocity": { "type": "number" }
+            }
+          },
+          "settleMs": { "type": "integer" },
+          "captureMs": { "type": "integer" },
+          "sampleEveryMs": { "type": "integer" },
+          "midi": { "$ref": "#/$defs/RunMidiEvent" },
+          "series": { "$ref": "#/$defs/SpectrumSeries" },
+          "aggregate": { "$ref": "#/$defs/SpectrumAggregate" }
+        }
+      }
+    },
+    {
+      "name": "midi_note_off_and_get_spectrum",
+      "description": "Send MIDI note-off, wait briefly, then capture a compact spectrum-summary series. Useful to detect release clicks/pops.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "note": { "type": "integer", "minimum": 0, "maximum": 127 },
+          "settleMs": { "type": "integer", "minimum": 0, "maximum": 5000 },
+          "captureMs": { "type": "integer", "minimum": 50, "maximum": 10000 },
+          "sampleEveryMs": { "type": "integer", "minimum": 40, "maximum": 500 },
+          "maxFrames": { "type": "integer", "minimum": 1, "maximum": 20 }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sent": {
+            "type": "object",
+            "properties": {
+              "action": { "const": "off" },
+              "note": { "type": "integer" }
+            }
+          },
+          "settleMs": { "type": "integer" },
+          "captureMs": { "type": "integer" },
+          "sampleEveryMs": { "type": "integer" },
+          "midi": { "$ref": "#/$defs/RunMidiEvent" },
+          "series": { "$ref": "#/$defs/SpectrumSeries" },
+          "aggregate": { "$ref": "#/$defs/SpectrumAggregate" }
+        }
+      }
+    },
+    {
+      "name": "midi_note_pulse_and_get_spectrum",
+      "description": "Send MIDI note pulse (on then off) and capture a compact spectrum-summary series. Recommended for deterministic one-shot polyphonic tests.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "note": { "type": "integer", "minimum": 0, "maximum": 127 },
+          "velocity": { "type": "number", "minimum": 0, "maximum": 1 },
+          "holdMs": { "type": "integer", "minimum": 1, "maximum": 5000 },
+          "captureMs": { "type": "integer", "minimum": 50, "maximum": 10000 },
+          "sampleEveryMs": { "type": "integer", "minimum": 40, "maximum": 500 },
+          "maxFrames": { "type": "integer", "minimum": 1, "maximum": 20 }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sent": {
+            "type": "object",
+            "properties": {
+              "action": { "const": "pulse" },
+              "note": { "type": "integer" },
+              "velocity": { "type": "number" },
+              "holdMs": { "type": "integer" }
+            }
+          },
+          "captureMs": { "type": "integer" },
+          "sampleEveryMs": { "type": "integer" },
+          "midi": { "$ref": "#/$defs/RunMidiEvent" },
+          "series": { "$ref": "#/$defs/SpectrumSeries" },
+          "aggregate": { "$ref": "#/$defs/SpectrumAggregate" }
+        }
+      }
+    },
+
+    {
+      "name": "get_audio_snapshot",
+      "description": "Compatibility tool. Returns the latest available spectrum content. Raw audio export (wav/pcm) is not implemented.",
+      "stability": "deprecated",
+      "deprecated": true,
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "duration_ms": { "type": "integer" },
+          "format": { "type": "string", "enum": ["wav", "pcm"] }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "compatibility": { "const": true },
+          "tool": { "const": "get_audio_snapshot" },
+          "note": { "type": "string" },
+          "requested": { "type": "object" },
+          "mime": { "const": "application/json" },
+          "content": { "$ref": "#/$defs/SpectrumSummary" }
+        }
+      }
+    }
+  ]
+}
