@@ -71,13 +71,6 @@ func main() {
 		MCPVersion:      MCPVersion,
 		ContractVersion: contract.ContractVersion,
 		RequiredToken:   *token,
-		// Publish / hide the contract tools depending on whether the
-		// webapp tab is actually connected. Drives
-		// notifications/tools/list_changed so MCP clients (Claude
-		// Desktop, …) only see the 34 faustcode tools when they would
-		// actually succeed.
-		OnTabConnected:    mcpSrv.RegisterTools,
-		OnTabDisconnected: mcpSrv.UnregisterTools,
 	}, bridge, log)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

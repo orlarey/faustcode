@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,14 +16,15 @@ import (
 
 // MCPServer wraps the SDK Server with our wiring.
 //
-// Tools are NOT registered at construction. They appear only after the
-// webapp tab connects (RegisterTools), and disappear when it
-// disconnects (UnregisterTools). The Go SDK emits
-// `notifications/tools/list_changed` on every AddTool / RemoveTools
-// call to every live session, so connected MCP clients (Claude Desktop,
-// Claude Code, …) refetch the tool list and only see the 34 faustcode
-// tools when they are actually usable. This avoids surfacing tools that
-// would immediately fail with "tab not connected".
+// All 34 contract tools are registered at construction. This was
+// deliberately changed back from a dynamic-registration scheme : Claude
+// Desktop (and other clients) freeze their tool catalogue at the start
+// of a conversation, so a tools/list_changed notification arriving
+// after the webapp tab connects has no effect on the running session —
+// the user would need to restart the conversation. With tools always
+// registered, the catalogue is stable and a clear error message on
+// no_webapp lets the assistant instruct the user to open the tab and
+// retry within the same conversation.
 type MCPServer struct {
 	server         *mcp.Server
 	bridge         *Bridge
@@ -32,9 +32,6 @@ type MCPServer struct {
 	validator      *SchemaValidator
 	requestTimeout time.Duration
 	log            *slog.Logger
-
-	mu              sync.Mutex
-	toolsRegistered bool
 }
 
 // NewMCPServer builds the SDK server, declares one tool per contract entry,
@@ -59,23 +56,8 @@ func NewMCPServer(contract *ToolsContract, bridge *Bridge, log *slog.Logger, req
 		log:            log,
 	}
 	log.Info("schemas compiled", "tools", len(contract.Tools))
-	log.Info("tools NOT yet registered — waiting for webapp tab to connect")
-	return m, nil
-}
-
-// RegisterTools advertises all contract tools to MCP clients. The Go
-// SDK's AddTool fires `notifications/tools/list_changed` on every live
-// session, so connected MCP clients refetch and the tools become
-// visible. Called by the WS server when the webapp tab connects.
-// Idempotent.
-func (m *MCPServer) RegisterTools() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.toolsRegistered {
-		return
-	}
-	for i := range m.contract.Tools {
-		def := m.contract.Tools[i] // capture by value for the handler closure
+	for i := range contract.Tools {
+		def := contract.Tools[i] // capture by value for the handler closure
 		tool := &mcp.Tool{
 			Name:         def.Name,
 			Description:  def.Description,
@@ -83,27 +65,10 @@ func (m *MCPServer) RegisterTools() {
 			OutputSchema: def.OutputSchema,
 			Meta:         buildToolMeta(def),
 		}
-		m.server.AddTool(tool, m.makeHandler(def.Name))
+		srv.AddTool(tool, m.makeHandler(def.Name))
 	}
-	m.toolsRegistered = true
-	m.log.Info("mcp tools registered (tab connected)", "count", len(m.contract.Tools))
-}
-
-// UnregisterTools hides every contract tool from MCP clients. Called by
-// the WS server when the webapp tab disconnects. Idempotent.
-func (m *MCPServer) UnregisterTools() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.toolsRegistered {
-		return
-	}
-	names := make([]string, len(m.contract.Tools))
-	for i := range m.contract.Tools {
-		names[i] = m.contract.Tools[i].Name
-	}
-	m.server.RemoveTools(names...)
-	m.toolsRegistered = false
-	m.log.Info("mcp tools unregistered (tab disconnected)", "count", len(names))
+	log.Info("mcp tools registered", "count", len(contract.Tools))
+	return m, nil
 }
 
 // makeHandler returns a ToolHandler that dispatches `op` through the bridge.
@@ -113,7 +78,10 @@ func (m *MCPServer) makeHandler(op string) mcp.ToolHandler {
 		ch, err := m.bridge.register(id)
 		if err != nil {
 			if errors.Is(err, errNoWebapp) {
-				return mcpToolError(ErrCodeNoWebapp, "faustcode tab not connected"), nil
+				return mcpToolError(ErrCodeNoWebapp,
+					"faustcode tab not connected. Please open https://orlarey.github.io/faustcode/ "+
+						"in a browser, then retry this tool call.",
+				), nil
 			}
 			return nil, err
 		}

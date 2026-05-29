@@ -116,23 +116,10 @@ func main() {
 	cmd.Stderr = os.Stderr
 	transport := &mcp.CommandTransport{Command: cmd}
 
-	// Faustcode-mcp registers its tools dynamically — they appear only
-	// after the WS handshake completes. The server fires
-	// notifications/tools/list_changed, which we wait for here before
-	// calling ListTools to avoid the race between the probe sending
-	// Ready and the server's OnTabConnected hook adding the tools.
-	toolsChanged := make(chan struct{}, 1)
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "faustcode-mcp-e2e-probe",
 		Version: "0.0.1",
-	}, &mcp.ClientOptions{
-		ToolListChangedHandler: func(_ context.Context, _ *mcp.ToolListChangedRequest) {
-			select {
-			case toolsChanged <- struct{}{}:
-			default:
-			}
-		},
-	})
+	}, nil)
 
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
@@ -147,14 +134,6 @@ func main() {
 			log.Printf("[probe] fake webapp ready")
 		case <-time.After(10 * time.Second):
 			fail("fake webapp never reached ready state")
-		}
-		// Wait for the binary to fire tools/list_changed once the WS
-		// handshake makes it through (server-side OnTabConnected).
-		select {
-		case <-toolsChanged:
-			log.Printf("[probe] tools/list_changed received")
-		case <-time.After(5 * time.Second):
-			fail("tools/list_changed never received")
 		}
 	} else {
 		// External webapp : give it ample time to connect. The first

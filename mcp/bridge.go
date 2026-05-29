@@ -45,10 +45,14 @@ func (b *Bridge) AttachSender(send func(msg any) error) {
 		// Disconnect path : drain pending calls with a clear error.
 		for id, p := range b.inflight {
 			p.ch <- WsResp{
-				Kind:  KindResp,
-				ID:    id,
-				OK:    false,
-				Error: &WsErrorPayload{Code: ErrCodeWebappDisconnected, Message: "faustcode tab disconnected"},
+				Kind: KindResp,
+				ID:   id,
+				OK:   false,
+				Error: &WsErrorPayload{
+					Code: ErrCodeWebappDisconnected,
+					Message: "faustcode tab disconnected mid-call. " +
+						"Please open https://orlarey.github.io/faustcode/ in a browser and retry.",
+				},
 			}
 		}
 		b.inflight = make(map[string]*pendingCall)
