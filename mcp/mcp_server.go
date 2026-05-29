@@ -58,17 +58,53 @@ func NewMCPServer(contract *ToolsContract, bridge *Bridge, log *slog.Logger, req
 	log.Info("schemas compiled", "tools", len(contract.Tools))
 	for i := range contract.Tools {
 		def := contract.Tools[i] // capture by value for the handler closure
+		// Inline the contract-wide $defs into each tool's schemas so
+		// $ref pointers like "#/$defs/SessionMeta" resolve when MCP
+		// clients (Claude Desktop, …) validate the response on their
+		// side. Without this, the published per-tool schema has no
+		// $defs section and validation fails silently.
+		inputWithDefs, err := injectDefs(def.InputSchema, contract.Defs)
+		if err != nil {
+			return nil, fmt.Errorf("inject $defs into %s.inputSchema: %w", def.Name, err)
+		}
+		outputWithDefs, err := injectDefs(def.OutputSchema, contract.Defs)
+		if err != nil {
+			return nil, fmt.Errorf("inject $defs into %s.outputSchema: %w", def.Name, err)
+		}
 		tool := &mcp.Tool{
 			Name:         def.Name,
 			Description:  def.Description,
-			InputSchema:  def.InputSchema,
-			OutputSchema: def.OutputSchema,
+			InputSchema:  inputWithDefs,
+			OutputSchema: outputWithDefs,
 			Meta:         buildToolMeta(def),
 		}
 		srv.AddTool(tool, m.makeHandler(def.Name))
 	}
 	log.Info("mcp tools registered", "count", len(contract.Tools))
 	return m, nil
+}
+
+// injectDefs copies the contract-wide $defs into the given JSON schema
+// so $ref pointers resolve when the schema is published in isolation.
+// A schema that already declares its own $defs is left untouched on
+// the assumption that whoever wrote it knew what they were doing.
+func injectDefs(schema json.RawMessage, defs map[string]json.RawMessage) (json.RawMessage, error) {
+	if len(schema) == 0 || len(defs) == 0 {
+		return schema, nil
+	}
+	var asObject map[string]json.RawMessage
+	if err := json.Unmarshal(schema, &asObject); err != nil {
+		return nil, err
+	}
+	if _, alreadyHas := asObject["$defs"]; alreadyHas {
+		return schema, nil
+	}
+	defsRaw, err := json.Marshal(defs)
+	if err != nil {
+		return nil, err
+	}
+	asObject["$defs"] = defsRaw
+	return json.Marshal(asObject)
 }
 
 // makeHandler returns a ToolHandler that dispatches `op` through the bridge.
