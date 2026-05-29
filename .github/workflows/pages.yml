@@ -1,0 +1,52 @@
+# Build the static webapp + the tools.json contract and publish them as
+# GitHub Pages. The webapp lives in webapp/ ; tools.json lives at the
+# repo root. Pages serves the artifact root, so we stage webapp/ as the
+# root and copy tools.json alongside index.html so contract.js's
+# './tools.json' candidate URL resolves on the deployed site.
+#
+# Resulting URL : https://<user>.github.io/faustcode/
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time ; cancel queued runs.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage Pages artifact
+        run: |
+          mkdir -p _site
+          cp -R webapp/. _site/
+          cp tools.json _site/tools.json
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

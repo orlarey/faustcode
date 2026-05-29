@@ -1,0 +1,86 @@
+# Cross-build the faustcode-mcp Go binary for the five platforms the
+# webapp's "Setup MCP" panel offers (darwin/amd64, darwin/arm64,
+# linux/amd64, linux/arm64, windows/amd64), then attach the binaries
+# to the GitHub Release tied to the tag.
+#
+# Tagging convention : v<contractVersion>. tools.json's contractVersion
+# field is what the webapp uses to build the download URL, so the tag
+# MUST match. Example :
+#
+#   git tag v0.1.0
+#   git push origin v0.1.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            ext: ''
+          - goos: darwin
+            goarch: amd64
+            ext: ''
+          - goos: linux
+            goarch: amd64
+            ext: ''
+          - goos: linux
+            goarch: arm64
+            ext: ''
+          - goos: windows
+            goarch: amd64
+            ext: '.exe'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mcp/go.mod
+          cache-dependency-path: mcp/go.sum
+
+      - name: Build faustcode-mcp-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+        working-directory: mcp
+        env:
+          GOOS:       ${{ matrix.goos }}
+          GOARCH:     ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          OUT=faustcode-mcp-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          go build -trimpath -ldflags='-s -w' -o "$OUT" .
+          ls -lh "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faustcode-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: mcp/faustcode-mcp-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artefacts
+        run: ls -lh dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
