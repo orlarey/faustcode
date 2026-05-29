@@ -50,6 +50,12 @@ jobs:
           go-version-file: mcp/go.mod
           cache-dependency-path: mcp/go.sum
 
+      - name: Sync contract
+        # mcp/tools.json is gitignored ; the single source of truth lives
+        # at the repo root. Mirror it into mcp/ before building so the
+        # //go:embed directive in contract.go picks it up.
+        run: cp tools.json mcp/tools.json
+
       - name: Build faustcode-mcp-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
         working-directory: mcp
         env:
