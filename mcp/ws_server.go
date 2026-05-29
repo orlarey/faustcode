@@ -99,11 +99,16 @@ func (s *WSServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Replace any existing connection (PR-5). The old reader goroutine
-	// will exit naturally once its conn is closed.
+	// Replace any existing connection (PR-5). Before tearing the old
+	// one down, send a close frame with our custom code 4001 and reason
+	// "superseded-by-new-tab" so the losing client knows it was kicked
+	// on purpose and can stop its automatic reconnect (otherwise the
+	// two tabs ping-pong forever).
 	s.connMu.Lock()
 	if old := s.conn; old != nil {
 		s.log.Info("ws: replacing previous connection")
+		closeMsg := websocket.FormatCloseMessage(WSCloseSupersededByNewTab, "superseded-by-new-tab")
+		_ = old.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(s.cfg.WriteTimeout))
 		_ = old.Close()
 	}
 	s.conn = conn

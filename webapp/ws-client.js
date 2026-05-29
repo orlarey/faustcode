@@ -21,6 +21,12 @@ let currentOpts = null;
 let attemptIndex = 0;          // ramped up on each consecutive failure
 const BACKOFF_STEPS_MS = [250, 500, 1000, 2000, 4000, 8000, 16000, 30000];
 
+// Private WebSocket close code (4000-4999 range, application-defined).
+// faustcode-mcp emits this on the OLD connection when a NEW tab opens
+// (PR-5). We use it as an explicit "stop reconnecting" signal so the
+// losing tab doesn't keep ping-ponging the winner.
+const WS_CLOSE_SUPERSEDED_BY_NEW_TAB = 4001;
+
 /**
  * connectMcp opens (or replaces) the WebSocket connection.
  *
@@ -59,8 +65,19 @@ function attemptConnect() {
   ws.addEventListener('open', () => opts.onStateChange('open'));
   ws.addEventListener('error', (ev) => opts.onStateChange('error', ev.message || 'WebSocket error'));
   ws.addEventListener('close', (ev) => {
-    opts.onStateChange('close', ev.code !== 1000 ? `code=${ev.code} reason=${ev.reason || '(none)'}` : '');
     activeConn = null;
+
+    // Server told us we lost the seat to a newer tab. Don't reconnect ;
+    // surface a distinct state so the UI can prompt the user.
+    if (ev.code === WS_CLOSE_SUPERSEDED_BY_NEW_TAB) {
+      // Halt the retry loop on this client until the user explicitly
+      // chooses to reconnect (Connect button in the MCP drawer).
+      intentionalDisconnect = true;
+      opts.onStateChange('superseded', ev.reason || 'superseded-by-new-tab');
+      return;
+    }
+
+    opts.onStateChange('close', ev.code !== 1000 ? `code=${ev.code} reason=${ev.reason || '(none)'}` : '');
     // Schedule a reconnect unless the close was explicitly requested.
     if (!intentionalDisconnect && currentOpts) {
       const delay = BACKOFF_STEPS_MS[Math.min(attemptIndex, BACKOFF_STEPS_MS.length - 1)];

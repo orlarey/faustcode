@@ -81,6 +81,13 @@ const (
 	ErrCodeContractMismatch   = "contract_mismatch"
 )
 
+// WSCloseSupersededByNewTab is a private close code in the WebSocket
+// 4000-4999 application range. The MCP server sends it on the OLD
+// connection when a NEW tab opens (PR-5) so the losing client can
+// distinguish a deliberate replacement from a transient network glitch
+// and skip its automatic reconnect.
+const WSCloseSupersededByNewTab = 4001
+
 // SemVer is the minimal SemVer triplet we need for the NW-1..NW-5 handshake.
 // Only the integer major / minor / patch are tracked; pre-release tags
 // (e.g. "1.2.3-rc1") are tolerated but ignored beyond the patch component.

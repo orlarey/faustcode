@@ -186,6 +186,15 @@ function startConnect() {
           setStatus('connecting', `reconnecting in ${(detail.delay / 1000).toFixed(1)}s…`);
           if (connectBtn) connectBtn.disabled = false;
           break;
+        case 'superseded':
+          // Another faustcode tab took the MCP bridge from us. The
+          // ws-client has stopped its retry loop ; we surface a
+          // distinct state so the user knows what happened.
+          appendLog('warn', 'another tab took over the MCP bridge — this tab will stay disconnected');
+          setStatus('error', 'another tab is using MCP');
+          if (disconnectBtn) disconnectBtn.disabled = true;
+          if (connectBtn) connectBtn.disabled = false;
+          break;
       }
     },
     onReq: async (req) => {
