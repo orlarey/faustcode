@@ -17,13 +17,23 @@ import (
 // WSConfig groups the server-side tuning knobs. Defaults match the
 // invariants laid out in SPECIFICATION-STANDALONE.md §Protocole.
 type WSConfig struct {
-	Addr               string        // e.g. "127.0.0.1:7777"
-	HeartbeatInterval  time.Duration // default 30s
-	HeartbeatTimeout   time.Duration // default 10s
-	WriteTimeout       time.Duration // default 5s
-	MCPVersion         string        // sent in WsHello.mcpVersion
-	ContractVersion    string        // sent in WsHello.contractVersion
-	RequiredToken      string        // if non-empty, the webapp must send the same string in WsReady.token (SC-4)
+	Addr              string        // e.g. "127.0.0.1:7777"
+	HeartbeatInterval time.Duration // default 30s
+	HeartbeatTimeout  time.Duration // default 10s
+	WriteTimeout      time.Duration // default 5s
+	MCPVersion        string        // sent in WsHello.mcpVersion
+	ContractVersion   string        // sent in WsHello.contractVersion
+	RequiredToken     string        // if non-empty, the webapp must send the same string in WsReady.token (SC-4)
+
+	// OnTabConnected is invoked right after the WS handshake completes
+	// (NW-2). The MCP server uses this to register its tools so
+	// connected MCP clients see them appear via
+	// notifications/tools/list_changed.
+	OnTabConnected func()
+	// OnTabDisconnected is invoked when the WS connection closes for
+	// any reason. The MCP server uses this to remove its tools so
+	// clients stop seeing tools that would immediately fail.
+	OnTabDisconnected func()
 }
 
 // WSServer wraps the http.Server + the gorilla upgrader.
@@ -114,6 +124,9 @@ func (s *WSServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		_ = c.SetWriteDeadline(time.Now().Add(s.cfg.WriteTimeout))
 		return c.WriteMessage(websocket.TextMessage, raw)
 	})
+	// Tracks whether the handshake completed so OnTabConnected was
+	// fired ; gates the matching OnTabDisconnected in the defer.
+	tabReady := false
 	defer func() {
 		s.connMu.Lock()
 		if s.conn == conn {
@@ -121,6 +134,9 @@ func (s *WSServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		s.connMu.Unlock()
 		s.bridge.AttachSender(nil) // flush inflight + clear sender
+		if tabReady && s.cfg.OnTabDisconnected != nil {
+			s.cfg.OnTabDisconnected()
+		}
 		_ = conn.Close()
 		s.log.Info("ws closed")
 	}()
@@ -212,6 +228,15 @@ func (s *WSServer) handleWS(w http.ResponseWriter, r *http.Request) {
 				s.log.Info("ws ready",
 					"webappVersion", ready.WebappVersion,
 					"contractVersion", ready.ContractVersion)
+			}
+			// Handshake fully accepted (NW-2 + contract check passed).
+			// Tell the MCP server it can publish its tools — the SDK
+			// auto-emits tools/list_changed so connected clients refetch.
+			if !tabReady {
+				tabReady = true
+				if s.cfg.OnTabConnected != nil {
+					s.cfg.OnTabConnected()
+				}
 			}
 		case KindResp:
 			var resp WsResp

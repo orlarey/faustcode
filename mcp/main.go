@@ -60,18 +60,25 @@ func main() {
 
 	bridge := NewBridge()
 
-	wsSrv := NewWSServer(WSConfig{
-		Addr:            *wsAddr,
-		MCPVersion:      MCPVersion,
-		ContractVersion: contract.ContractVersion,
-		RequiredToken:   *token,
-	}, bridge, log)
-
 	mcpSrv, err := NewMCPServer(contract, bridge, log, *requestTimeout)
 	if err != nil {
 		log.Error("failed to build MCP server", "err", err)
 		os.Exit(1)
 	}
+
+	wsSrv := NewWSServer(WSConfig{
+		Addr:            *wsAddr,
+		MCPVersion:      MCPVersion,
+		ContractVersion: contract.ContractVersion,
+		RequiredToken:   *token,
+		// Publish / hide the contract tools depending on whether the
+		// webapp tab is actually connected. Drives
+		// notifications/tools/list_changed so MCP clients (Claude
+		// Desktop, …) only see the 34 faustcode tools when they would
+		// actually succeed.
+		OnTabConnected:    mcpSrv.RegisterTools,
+		OnTabDisconnected: mcpSrv.UnregisterTools,
+	}, bridge, log)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
