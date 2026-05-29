@@ -2,8 +2,6 @@
 // download links and launch instructions, following the contract laid
 // out in SPECIFICATION-STANDALONE.md §Distribution.
 
-const RELEASES_BASE = 'https://github.com/orlarey/faustcode/releases/download';
-
 const TARGETS = [
   { slug: 'darwin-arm64', label: 'macOS · Apple Silicon (arm64)' },
   { slug: 'darwin-amd64', label: 'macOS · Intel (x86_64)' },
@@ -42,9 +40,14 @@ function detectTarget() {
   return null;
 }
 
-function downloadUrl(contractVersion, slug) {
+function downloadUrl(_contractVersion, slug) {
+  // GitHub's `releases/latest/download/<asset>` alias 302-redirects to
+  // the freshest published release's asset, so users always get the
+  // most recent binary regardless of how often we cut tags. We keep
+  // the contractVersion param in the signature so future schemes can
+  // pin to a specific version if needed.
   const ext = slug.startsWith('windows-') ? '.exe' : '';
-  return `${RELEASES_BASE}/v${contractVersion}/faustcode-mcp-${slug}${ext}`;
+  return `https://github.com/orlarey/faustcode/releases/latest/download/faustcode-mcp-${slug}${ext}`;
 }
 
 function runCommandFor(slug) {
