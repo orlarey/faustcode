@@ -143,7 +143,7 @@
   "tools": [
     {
       "name": "get_onboarding_guide",
-      "description": "Return best-practice workflow and thresholds so an AI client can operate Faustforge autonomously.",
+      "description": "Return best-practice workflow and thresholds so an AI client can operate faustcode autonomously.",
       "stability": "stable",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "outputSchema": {

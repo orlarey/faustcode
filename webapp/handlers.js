@@ -162,23 +162,36 @@ async function submit(args) {
   let tasksDot = null;
 
   // SVG diagrams — also our compile sanity check.
-  const svgOk = compiler.generateAuxFiles(name, code, '-lang wasm -o binary -svg');
-  if (!svgOk) {
+  // libfaust-wasm sometimes throws on broken code (e.g. unknown
+  // symbols) instead of cleanly returning false ; catch the throw so
+  // submit still reports the error gracefully via the result instead
+  // of leaking it as a JS exception.
+  let svgOk = false;
+  try {
+    svgOk = compiler.generateAuxFiles(name, code, '-lang wasm -o binary -svg');
+  } catch (err) {
+    errors = compiler.getErrorMessage() || (err && err.message) || 'compilation threw';
+  }
+  if (!svgOk && !errors) {
     errors = compiler.getErrorMessage() || 'compilation failed';
-  } else {
+  } else if (svgOk) {
     const files = tryReadDir(fs, `/${name}-svg`);
     if (files && files.length) {
       svg = {};
       for (const f of files) svg[f] = tryReadFile(fs, `/${name}-svg/${f}`);
     }
     // signals.dot — output is written to /<name>-sig.dot (cf. POC).
-    if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -sg')) {
-      signalsDot = tryReadFile(fs, `/${name}-sig.dot`);
-    }
+    try {
+      if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -sg')) {
+        signalsDot = tryReadFile(fs, `/${name}-sig.dot`);
+      }
+    } catch {}
     // tasks.dot — output is written to /<name>.dot.
-    if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -vec -tg')) {
-      tasksDot = tryReadFile(fs, `/${name}.dot`);
-    }
+    try {
+      if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -vec -tg')) {
+        tasksDot = tryReadFile(fs, `/${name}.dot`);
+      }
+    } catch {}
   }
 
   const compiledOk = errors === '';
@@ -336,10 +349,13 @@ async function get_view_content() {
       if (!session.tasksDot) throw new Error('tasks.dot not available');
       return { view: 'tasks', mime: 'text/vnd.graphviz', content: session.tasksDot };
     }
-    case 'run':
-      // Spectrum will land with the audio engine in F3 ; for now report
-      // gracefully that there's nothing to show yet.
-      throw new Error('Run spectrum not available (audio engine lands in F3)');
+    case 'run': {
+      // tools.json says : "For view=run, returns the latest spectrum
+      // summary." Delegate to the same cache get_spectrum reads.
+      const cache = getLatestSpectrum();
+      if (!cache) throw new Error('Run spectrum not available — start audio first');
+      return { view: 'run', mime: 'application/json', content: cache };
+    }
     default:
       throw new Error(`Unsupported view: ${view}`);
   }

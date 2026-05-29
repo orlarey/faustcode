@@ -122,21 +122,33 @@ async function compileAndStore(code, filename) {
   let signalsDot = null;
   let tasksDot = null;
 
-  const svgOk = compiler.generateAuxFiles(name, code, '-lang wasm -o binary -svg');
-  if (!svgOk) {
+  // libfaust-wasm sometimes throws (instead of cleanly returning
+  // false) on broken code — wrap the calls so a JS exception doesn't
+  // leak out of the shim.
+  let svgOk = false;
+  try {
+    svgOk = compiler.generateAuxFiles(name, code, '-lang wasm -o binary -svg');
+  } catch (err) {
+    errors = compiler.getErrorMessage() || (err && err.message) || 'compilation threw';
+  }
+  if (!svgOk && !errors) {
     errors = compiler.getErrorMessage() || 'compilation failed';
-  } else {
+  } else if (svgOk) {
     const files = tryReadDir(fs, `/${name}-svg`);
     if (files && files.length) {
       svg = {};
       for (const f of files) svg[f] = tryReadFile(fs, `/${name}-svg/${f}`);
     }
-    if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -sg')) {
-      signalsDot = tryReadFile(fs, `/${name}-sig.dot`);
-    }
-    if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -vec -tg')) {
-      tasksDot = tryReadFile(fs, `/${name}.dot`);
-    }
+    try {
+      if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -sg')) {
+        signalsDot = tryReadFile(fs, `/${name}-sig.dot`);
+      }
+    } catch {}
+    try {
+      if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -vec -tg')) {
+        tasksDot = tryReadFile(fs, `/${name}.dot`);
+      }
+    } catch {}
   }
 
   if (errors === '') {
