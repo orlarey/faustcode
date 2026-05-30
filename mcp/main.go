@@ -58,6 +58,13 @@ func main() {
 		"contractVersion", contract.ContractVersion,
 		"tools", len(contract.Tools))
 
+	// Prepare the render_audio sink (creates dir, prunes stale WAVs).
+	if err := setupRenderDir(); err != nil {
+		log.Warn("render dir setup failed", "err", err, "dir", renderDir())
+	} else {
+		log.Info("render dir ready", "dir", renderDir())
+	}
+
 	bridge := NewBridge()
 
 	mcpSrv, err := NewMCPServer(contract, bridge, log, *requestTimeout)

@@ -45,6 +45,9 @@ import {
   mcpCaptureSpectrumSeries,
   mcpSendMidi,
 } from './views/run.js';
+import { renderOffline, fingerprintRender } from './offline-render.js';
+import { encodeFloat32Wav, computePeakRms, bytesToBase64 } from './wav-encode.js';
+import { buildSpectrumSummary } from './spectrum.js';
 
 /**
  * dispatch(req) — entry point called from ws-client.js.
@@ -574,19 +577,92 @@ async function get_spectrum() {
   return { mime: 'application/json', content: mcpGetLatestSpectrum() };
 }
 
-async function get_audio_snapshot(args) {
-  // Compatibility tool — returns the latest spectrum content.
-  await ensureRunViewMounted();
+/**
+ * Render the active session offline with a scripted param timeline and
+ * return either a spectrum summary ('light') or a Float32 WAV
+ * ('wav'). See `tools.json: render_audio` for the contract.
+ *
+ * The WAV path : the webapp ships the audio bytes base64-encoded inside
+ * the WS response. The Go binary picks the payload out, writes it to
+ * disk under `/tmp/faustcode-renders/<sha8>-<paramfp>.wav`, and
+ * replaces the underscore-prefixed fields by a clean `path` before
+ * the MCP client sees the result. So the base64 lives only between
+ * webapp and binary — never in Claude's context window.
+ */
+async function render_audio(args) {
+  const detail = args.detail === 'wav' ? 'wav' : 'light';
+  const sha1 = activeSha1OrThrow();
+  const session = getSession(sha1);
+  if (!session) throw new Error(`Session not found: ${sha1}`);
+  if (session.errors) {
+    throw new Error('Active session has compile errors and cannot be rendered.');
+  }
+  const sampleRate = typeof args.sampleRate === 'number' ? args.sampleRate : 48_000;
+  const channels = typeof args.channels === 'number' ? args.channels : 2;
+  const polyVoices = typeof args.polyVoices === 'number' ? args.polyVoices : 0;
+  const durationMs = typeof args.durationMs === 'number' ? args.durationMs : 2_000;
+  const paramSetup = args.paramSetup && typeof args.paramSetup === 'object' ? args.paramSetup : {};
+  const script = Array.isArray(args.script) ? args.script : [];
+
+  const renderReq = { sampleRate, channels, polyVoices, durationMs, paramSetup, script };
+  const fp = await fingerprintRender(renderReq);
+
+  const { buffer, freqDb, timeData, analyserFftSize } = await renderOffline({
+    code: session.code,
+    sampleRate,
+    channels,
+    polyVoices,
+    durationMs,
+    paramSetup,
+    script,
+    captureSpectrumTail: detail === 'light',
+  });
+
+  if (detail === 'light') {
+    if (!freqDb || !timeData) {
+      throw new Error('Spectrum tap missed (durationMs likely too short for one fftSize window).');
+    }
+    const summary = buildSpectrumSummary({
+      freqData: freqDb,
+      timeData,
+      sampleRate: buffer.sampleRate,
+      prevSummary: null,
+    });
+    return {
+      mime: 'application/json',
+      content: summary,
+      render: {
+        sha1,
+        fingerprint: fp,
+        sampleRate: buffer.sampleRate,
+        channels: buffer.numberOfChannels,
+        durationMs,
+        analyserFftSize,
+      },
+    };
+  }
+
+  // detail === 'wav' : encode, base64, return the special envelope the
+  // Go binary will rewrite.
+  const wavBytes = encodeFloat32Wav(buffer);
+  const { peakDbFS, rmsDbFS } = computePeakRms(buffer);
+  const filenameHint = `${sha1.slice(0, 8)}-${fp}.wav`;
+
   return {
-    compatibility: true,
-    tool: 'get_audio_snapshot',
-    note: 'Raw audio export is not implemented in faustcode; returning latest spectrum content instead.',
-    requested: {
-      duration_ms: typeof args.duration_ms === 'number' ? args.duration_ms : undefined,
-      format: typeof args.format === 'string' ? args.format : undefined,
+    mime: 'audio/wav',
+    // Underscore-prefixed fields are consumed and stripped by the Go
+    // binary. They MUST NOT appear in the final MCP response.
+    _wav_payload_base64: bytesToBase64(wavBytes),
+    _wav_filename_hint: filenameHint,
+    render: {
+      sha1,
+      fingerprint: fp,
+      sampleRate: buffer.sampleRate,
+      channels: buffer.numberOfChannels,
+      durationMs,
+      peakDbFS: Number(peakDbFS.toFixed(2)),
+      rmsDbFS: Number(rmsDbFS.toFixed(2)),
     },
-    mime: 'application/json',
-    content: mcpGetLatestSpectrum(),
   };
 }
 
@@ -774,9 +850,10 @@ const HANDLERS = {
   set_polyphony,
   // Spectrum capture — F3d
   get_spectrum,
-  get_audio_snapshot,
   set_run_param_and_get_spectrum,
   trigger_button_and_get_spectrum,
+  // Offline render — F4
+  render_audio,
   // MIDI — F3c
   midi_note_on,
   midi_note_off,

@@ -148,14 +148,28 @@ func (m *MCPServer) makeHandler(op string) mcp.ToolHandler {
 				}
 				return mcpToolError(ErrCodeBadResponse, "unsuccessful response without error payload"), nil
 			}
+			// Intercept the render_audio WAV payload before schema
+			// validation : the webapp ships the audio bytes as base64
+			// inside the result ; we write them to a temp file and
+			// substitute the payload by a `path` so the MCP client
+			// (and the outputSchema) only ever see the file location.
+			result := resp.Result
+			if op == "render_audio" {
+				rewritten, err := processRenderAudio(result)
+				if err != nil {
+					m.log.Warn("render_audio payload handling failed", "err", err)
+					return mcpToolError(ErrCodeBadResponse, err.Error()), nil
+				}
+				result = rewritten
+			}
 			// Validate the webapp's result against the contract
 			// outputSchema. A mismatch turns into a clean MCP error
 			// instead of a malformed payload leaking to the client.
-			if err := m.validator.ValidateOutput(op, resp.Result); err != nil {
+			if err := m.validator.ValidateOutput(op, result); err != nil {
 				m.log.Warn("output schema validation failed", "op", op, "err", err)
 				return mcpToolError(ErrCodeBadResponse, err.Error()), nil
 			}
-			return mcpToolSuccess(resp.Result), nil
+			return mcpToolSuccess(result), nil
 
 		case <-time.After(m.requestTimeout):
 			return mcpToolError(ErrCodeTimeout, fmt.Sprintf("no response within %s", m.requestTimeout)), nil

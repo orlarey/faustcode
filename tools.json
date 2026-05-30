@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.2.0",
+  "contractVersion": "0.3.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -906,28 +906,87 @@
     },
 
     {
-      "name": "get_audio_snapshot",
-      "description": "Compatibility tool. Returns the latest available spectrum content. Raw audio export (wav/pcm) is not implemented.",
-      "stability": "deprecated",
-      "deprecated": true,
+      "name": "render_audio",
+      "description": "Render the active session offline (OfflineAudioContext, bit-stable, sampleRate-configurable) with a scripted param timeline. `detail` controls the return: 'light' returns a spectrum_summary_v1 computed near the end of the render ; 'wav' writes a Float32 WAV to disk and returns its path. The render does not require run_audio to be on. To capture a button press/release transition, set the button to 0 in `paramSetup` then schedule {atMs: T1, path, value: 1} and {atMs: T2, path, value: 0} in `script`. Granularity is one render quantum (~2.7 ms at 48 kHz).",
+      "stability": "stable",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "duration_ms": { "type": "integer" },
-          "format": { "type": "string", "enum": ["wav", "pcm"] }
+          "detail": { "type": "string", "enum": ["light", "wav"] },
+          "durationMs": { "type": "number", "exclusiveMinimum": 0, "maximum": 30000 },
+          "sampleRate": { "type": "number", "minimum": 8000, "maximum": 192000 },
+          "channels": { "type": "integer", "minimum": 1, "maximum": 2 },
+          "polyVoices": { "type": "integer", "enum": [0, 1, 2, 4, 8, 16, 32, 64] },
+          "paramSetup": {
+            "type": "object",
+            "description": "Initial param values applied before t=0. Required for buttons whose press transition must be captured (start them at 0).",
+            "additionalProperties": { "type": "number" }
+          },
+          "script": {
+            "type": "array",
+            "description": "Timed param events. Sorted internally by atMs. Granularity = one render quantum.",
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "properties": {
+                "atMs": { "type": "number", "minimum": 0 },
+                "path": { "type": "string", "pattern": "^/" },
+                "value": { "type": "number" }
+              },
+              "required": ["atMs", "path", "value"],
+              "additionalProperties": false
+            }
+          }
         },
+        "required": ["detail", "durationMs"],
         "additionalProperties": false
       },
       "outputSchema": {
         "type": "object",
-        "properties": {
-          "compatibility": { "const": true },
-          "tool": { "const": "get_audio_snapshot" },
-          "note": { "type": "string" },
-          "requested": { "type": "object" },
-          "mime": { "const": "application/json" },
-          "content": { "$ref": "#/$defs/SpectrumSummary" }
-        }
+        "oneOf": [
+          {
+            "properties": {
+              "mime": { "const": "application/json" },
+              "content": { "$ref": "#/$defs/SpectrumSummary" },
+              "render": {
+                "type": "object",
+                "properties": {
+                  "sha1": { "$ref": "#/$defs/Sha1" },
+                  "fingerprint": { "type": "string" },
+                  "sampleRate": { "type": "number" },
+                  "channels": { "type": "integer" },
+                  "durationMs": { "type": "number" },
+                  "analyserFftSize": { "type": ["integer", "null"] }
+                },
+                "required": ["sha1", "fingerprint", "sampleRate", "channels", "durationMs"]
+              }
+            },
+            "required": ["mime", "content", "render"]
+          },
+          {
+            "properties": {
+              "mime": { "const": "audio/wav" },
+              "path": {
+                "type": "string",
+                "description": "Absolute filesystem path to the rendered WAV. Float32 IEEE_FLOAT, readable by librosa.load(path, sr=None)."
+              },
+              "render": {
+                "type": "object",
+                "properties": {
+                  "sha1": { "$ref": "#/$defs/Sha1" },
+                  "fingerprint": { "type": "string" },
+                  "sampleRate": { "type": "number" },
+                  "channels": { "type": "integer" },
+                  "durationMs": { "type": "number" },
+                  "peakDbFS": { "type": "number" },
+                  "rmsDbFS": { "type": "number" }
+                },
+                "required": ["sha1", "fingerprint", "sampleRate", "channels", "durationMs", "peakDbFS", "rmsDbFS"]
+              }
+            },
+            "required": ["mime", "path", "render"]
+          }
+        ]
       }
     }
   ]

@@ -4,10 +4,10 @@ Audit de couverture : pour chaque action qu'un humain peut faire dans la
 webapp faustcode, quel outil MCP permet à une IA de produire le même
 effet ?
 
-Snapshot pris le **2026-05-30** (révisé en fin de journée après ajout des
-3 outils de gestion de sessions), contrat `tools.json` version **0.1.0**
-(37 outils). À refaire si on ajoute des outils ou si la webapp gagne /
-perd des surfaces.
+Snapshot pris le **2026-05-30** (révisé une 3ᵉ fois après ajout de
+`render_audio` qui remplace `get_audio_snapshot`), contrat `tools.json`
+version **0.3.0** (37 outils). À refaire si on ajoute des outils ou si
+la webapp gagne / perd des surfaces.
 
 Légende : **✓** couvert, **◐** partiellement couvert (effet équivalent
 mais sémantique différente), **✗** absent (souvent volontaire), **n/a**
@@ -83,8 +83,8 @@ cosmétique / non pertinent côté IA.
 
 | Action humaine | Tool MCP | État |
 |---|---|---|
-| Lire le spectre courant | `get_spectrum` | ✓ |
-| Capture audio brute (snapshot) | `get_audio_snapshot` | ◐ retourne le spectre (compat) |
+| Lire le spectre live (tap sur l'AnalyserNode du run audio) | `get_spectrum` | ✓ |
+| Rendu offline déterministe (script de gate, sampleRate configurable, sortie WAV Float32 ou spectre) | `render_audio` (`detail: light \| wav`) | ✓ |
 | Changer view (Waveform/Spectrum), scale, trigger, slope, threshold, holdoff | — | ✗ UI-only |
 
 ### D.4 MIDI
@@ -132,7 +132,8 @@ cosmétique / non pertinent côté IA.
 | Écriture audio runtime (params, transport, MIDI, polyphonie) | très complète |
 | Documentation Faust | très complète |
 | Gestion sessions (suppression, ordre, navigation par usage) | très complète depuis la passe du 2026-05-30 |
-| Réglages oscilloscope | absents (UI-only, cohérent) |
+| Réglages oscilloscope | absents (UI-only, cohérent) — pour les mesures fines : `render_audio` |
+| Mesure audio offline déterministe / export WAV | très complète via `render_audio` (Phase 1 livrée 2026-05-30) |
 | Sélection device MIDI externe | absent (peu critique : l'IA pilote via `midi_note_*`) |
 | Random / Presets | absents |
 | Download PWA / .dot / SVG | absents (hors scope) |
@@ -157,6 +158,22 @@ cosmétique / non pertinent côté IA.
 - **Bascule UI ↔ MCP** : `sessionOrder` est partagé via le même pattern que
   `activeSha1`/`activeView` (api-shim + `/api/state` + `pollState` à 1.5 s). Un changement
   côté MCP se reflète dans l'indicateur `⏱`/`★` en ≤ 1.5 s, et inversement.
+- **`render_audio`** : rendu **offline** déterministe via `OfflineAudioContext`. N'a pas
+  besoin que la Run view soit montée — compile le DSP de la session active à neuf, applique
+  `paramSetup`, scripte des événements de paramètres dans le temps (granularité = un
+  render quantum, ~2.7 ms @ 48 kHz), retourne soit un `spectrum_summary_v1` (`detail: light`),
+  soit un fichier WAV Float32 IEEE_FLOAT écrit sur disque (`detail: wav`). Le WAV transite
+  base64 dans le canal WS webapp↔binaire ; le binaire le décode, l'écrit sous
+  `$TMPDIR/faustcode-renders/<sha8>-<paramfp>.wav`, et substitue par un champ `path`
+  dans la réponse MCP — la base64 n'est **jamais** dans le contexte de l'IA. Fichiers
+  > 1 h supprimés au prochain démarrage du binaire. Le contenu est `librosa.load(path,
+  sr=None)`-compatible et bit-stable (les rendus avec les mêmes args produisent le même
+  fingerprint et le même fichier).
+- **Convention des événements à `atMs === 0`** : un event de script à `atMs=0` est appliqué
+  pendant `paramSetup` (avant `startRendering`) — il sert à exprimer l'état initial dans
+  `script` pour la symétrie avec les events suivants. **Pour qu'une transition de bouton soit
+  détectable par un DSP à déclenchement (front montant)**, schedulez la transition à
+  `atMs > 0` (e.g. `atMs: 10`) avec le bouton initial à `0` dans `paramSetup`.
 
 ## Conventions
 

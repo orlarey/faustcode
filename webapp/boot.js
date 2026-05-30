@@ -34,7 +34,7 @@ import * as floatingEditor from './floating-editor.js';
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
 
-const WEBAPP_VERSION = '0.2.0';
+const WEBAPP_VERSION = '0.3.0';
 
 // 1. Synchronously install the fetch shim BEFORE any view code runs.
 installApiShim();
