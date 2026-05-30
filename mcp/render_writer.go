@@ -25,6 +25,11 @@ const (
 	// fingerprint and the file reappears ; we do not need long-term
 	// persistence.
 	renderTTL = 1 * time.Hour
+	// Hard cap for the inlineAudio path : refuse to ship more than this
+	// many WAV bytes through the MCP Content stream. 2 MB lets a 10 s
+	// stereo @ 48 kHz Float32 (~3.8 MB) be refused with a clean error
+	// instead of flooding the wire.
+	maxInlineAudioBytes = 2 * 1024 * 1024
 )
 
 // renderDir returns the directory we write rendered WAV files to.
@@ -62,51 +67,54 @@ func setupRenderDir() error {
 }
 
 // processRenderAudio detects the underscore-prefixed wav payload in a
-// render_audio response, writes the audio to disk, and returns a result
-// where the payload fields are replaced by a `path` field. Inputs
-// without a `_wav_payload_base64` field (e.g. detail="light") pass
-// through unchanged.
-func processRenderAudio(result json.RawMessage) (json.RawMessage, error) {
+// render_audio response, writes the audio to disk, and returns the
+// rewritten JSON (with `path` replacing the payload fields) plus the
+// raw WAV bytes — the caller may attach those bytes as a standard MCP
+// AudioContent block when the client asked for inlineAudio.
+//
+// Inputs without a `_wav_payload_base64` field (e.g. detail="light")
+// pass through unchanged ; bytes return value is nil.
+func processRenderAudio(result json.RawMessage) (json.RawMessage, []byte, error) {
 	if len(result) == 0 {
-		return result, nil
+		return result, nil, nil
 	}
 	var asMap map[string]json.RawMessage
 	if err := json.Unmarshal(result, &asMap); err != nil {
 		// Not an object → can't carry a payload, pass through.
-		return result, nil
+		return result, nil, nil
 	}
 	payloadRaw, hasPayload := asMap["_wav_payload_base64"]
 	if !hasPayload {
-		return result, nil
+		return result, nil, nil
 	}
 	var payloadB64 string
 	if err := json.Unmarshal(payloadRaw, &payloadB64); err != nil {
-		return nil, fmt.Errorf("render_audio: _wav_payload_base64 is not a string: %w", err)
+		return nil, nil, fmt.Errorf("render_audio: _wav_payload_base64 is not a string: %w", err)
 	}
 	bytes, err := base64.StdEncoding.DecodeString(payloadB64)
 	if err != nil {
-		return nil, fmt.Errorf("render_audio: base64 decode failed: %w", err)
+		return nil, nil, fmt.Errorf("render_audio: base64 decode failed: %w", err)
 	}
 
 	hintRaw, ok := asMap["_wav_filename_hint"]
 	if !ok {
-		return nil, errors.New("render_audio: missing _wav_filename_hint")
+		return nil, nil, errors.New("render_audio: missing _wav_filename_hint")
 	}
 	var hint string
 	if err := json.Unmarshal(hintRaw, &hint); err != nil {
-		return nil, fmt.Errorf("render_audio: _wav_filename_hint not a string: %w", err)
+		return nil, nil, fmt.Errorf("render_audio: _wav_filename_hint not a string: %w", err)
 	}
 	hint = sanitizeFilename(hint)
 	if hint == "" {
-		return nil, errors.New("render_audio: empty filename hint after sanitization")
+		return nil, nil, errors.New("render_audio: empty filename hint after sanitization")
 	}
 
 	if err := os.MkdirAll(renderDir(), 0o755); err != nil {
-		return nil, fmt.Errorf("render_audio: mkdir: %w", err)
+		return nil, nil, fmt.Errorf("render_audio: mkdir: %w", err)
 	}
 	path := filepath.Join(renderDir(), hint)
 	if err := os.WriteFile(path, bytes, 0o644); err != nil {
-		return nil, fmt.Errorf("render_audio: write file: %w", err)
+		return nil, nil, fmt.Errorf("render_audio: write file: %w", err)
 	}
 
 	// Build the rewritten result : strip the underscore-prefixed fields,
@@ -117,7 +125,34 @@ func processRenderAudio(result json.RawMessage) (json.RawMessage, error) {
 	delete(asMap, "_wav_filename_hint")
 	pathRaw, _ := json.Marshal(path)
 	asMap["path"] = pathRaw
-	return json.Marshal(asMap)
+	rewritten, err := json.Marshal(asMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("render_audio: rewrite marshal: %w", err)
+	}
+	return rewritten, bytes, nil
+}
+
+// argsBoolField reads a boolean named `field` from the caller-supplied
+// arguments. Returns the default value (false) when the field is absent
+// or unparseable ; tool-level validation already caught explicit type
+// errors earlier in the pipeline.
+func argsBoolField(args json.RawMessage, field string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	var asMap map[string]json.RawMessage
+	if err := json.Unmarshal(args, &asMap); err != nil {
+		return false
+	}
+	raw, ok := asMap[field]
+	if !ok {
+		return false
+	}
+	var b bool
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return false
+	}
+	return b
 }
 
 // sanitizeFilename strips path traversal and anything that's not a-z 0-9

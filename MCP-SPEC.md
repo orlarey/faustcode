@@ -4,9 +4,9 @@ Audit de couverture : pour chaque action qu'un humain peut faire dans la
 webapp faustcode, quel outil MCP permet à une IA de produire le même
 effet ?
 
-Snapshot pris le **2026-05-30** (révisé une 3ᵉ fois après ajout de
-`render_audio` qui remplace `get_audio_snapshot`), contrat `tools.json`
-version **0.3.0** (37 outils). À refaire si on ajoute des outils ou si
+Snapshot pris le **2026-05-30** (révisé encore le **2026-05-31** après
+ajout de l'opt-in `inlineAudio` à `render_audio`), contrat `tools.json`
+version **0.4.0** (37 outils). À refaire si on ajoute des outils ou si
 la webapp gagne / perd des surfaces.
 
 Légende : **✓** couvert, **◐** partiellement couvert (effet équivalent
@@ -174,6 +174,18 @@ cosmétique / non pertinent côté IA.
   `script` pour la symétrie avec les events suivants. **Pour qu'une transition de bouton soit
   détectable par un DSP à déclenchement (front montant)**, schedulez la transition à
   `atMs > 0` (e.g. `atMs: 10`) avec le bouton initial à `0` dans `paramSetup`.
+- **`render_audio: inlineAudio` (opt-in)** : ajouté en 0.4.0 pour les clients MCP dont le
+  modèle tourne dans un sandbox qui ne partage pas le filesystem du binaire (ex : Claude
+  Desktop, dont les outils tournent dans un container Linux côté Anthropic alors que le
+  binaire faustcode tourne sur le Mac de l'utilisateur). Quand `true`, le binaire — après
+  avoir écrit le fichier et inséré `path` dans la réponse structurée — attache **en plus**
+  un bloc `AudioContent` standard MCP (`type:"audio"`, `mimeType:"audio/wav"`, `data` en
+  base64) au `Content[]` du `CallToolResult`. Les clients conformes à la spec MCP
+  matérialisent ce blob comme un fichier dans leur environnement (typiquement
+  `/mnt/user-data/tool_results/`) **sans injecter la base64 dans le contexte du modèle**.
+  Hard cap à **2 MB** : au-delà, l'appel échoue avec `payload_too_large` plutôt que de
+  noyer le wire. Pour Claude Code (binaire et modèle sur le même hôte), garder le défaut
+  `false` — `path` suffit, plus rapide et sans bytes redondants.
 
 ## Conventions
 

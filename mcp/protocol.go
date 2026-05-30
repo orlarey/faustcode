@@ -79,6 +79,7 @@ const (
 	ErrCodeOpUnknown          = "op_unknown"
 	ErrCodeBadResponse        = "bad_response"
 	ErrCodeContractMismatch   = "contract_mismatch"
+	ErrCodePayloadTooLarge    = "payload_too_large"
 )
 
 // WSCloseSupersededByNewTab is a private close code in the WebSocket

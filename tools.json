@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.3.0",
+  "contractVersion": "0.4.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -907,7 +907,7 @@
 
     {
       "name": "render_audio",
-      "description": "Render the active session offline (OfflineAudioContext, bit-stable, sampleRate-configurable) with a scripted param timeline. `detail` controls the return: 'light' returns a spectrum_summary_v1 computed near the end of the render ; 'wav' writes a Float32 WAV to disk and returns its path. The render does not require run_audio to be on. To capture a button press/release transition, set the button to 0 in `paramSetup` then schedule {atMs: T1, path, value: 1} and {atMs: T2, path, value: 0} in `script`. Granularity is one render quantum (~2.7 ms at 48 kHz).",
+      "description": "Render the active session offline (OfflineAudioContext, bit-stable, sampleRate-configurable) with a scripted param timeline. `detail` controls the return: 'light' returns a spectrum_summary_v1 computed near the end of the render ; 'wav' writes a Float32 WAV to disk (path returned in structured content). The render does not require run_audio to be on. To capture a button press/release transition, set the button to 0 in `paramSetup` then schedule {atMs: T1, path, value: 1} and {atMs: T2, path, value: 0} in `script`. Granularity is one render quantum (~2.7 ms at 48 kHz). For MCP clients whose model runs in a sandbox that does not share the filesystem of the binary (e.g. Claude Desktop's container), set `inlineAudio: true` to additionally attach a standard MCP `AudioContent` block — the client materialises the blob on its side without polluting the model's context. Rejected with `payload_too_large` above 2 MB.",
       "stability": "stable",
       "inputSchema": {
         "type": "object",
@@ -936,6 +936,10 @@
               "required": ["atMs", "path", "value"],
               "additionalProperties": false
             }
+          },
+          "inlineAudio": {
+            "type": "boolean",
+            "description": "Only meaningful when detail='wav'. When true, the response additionally includes a standard MCP AudioContent block (type='audio') carrying the WAV bytes. Spec-compliant clients materialise this block as a file in their environment without injecting the base64 into the model context — needed when the MCP client runs the model in a sandbox that cannot reach the binary's filesystem. Hard-capped at 2 MB of WAV bytes: above the cap the call errors with `payload_too_large` rather than silently flood the wire. Defaults to false."
           }
         },
         "required": ["detail", "durationMs"],
