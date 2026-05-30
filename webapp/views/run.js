@@ -41,6 +41,7 @@ import {
   drawFreqAxis,
   drawSpectrumGrid
 } from './shared/run-scope-utils.js';
+import { aggregateMaxHold } from '../spectrum.js';
 
 // Audio graph runtime (single active DSP instance for the Run view).
 let audioContext = null;
@@ -141,6 +142,12 @@ const suppressedUiParamEchoByPath = new Map();
 const compiledRunCache = new Map();
 const paramSmooth = new Map();
 const RUN_PERF_LOG_ENABLED = true;
+
+// MCP control surface : populated by render() so external callers
+// (handlers.js for MCP tools) can invoke the closures defined inside
+// render(). Cleared by dispose() so callers see a clean "not mounted"
+// signal between view switches.
+let _mcpController = null;
 
 /**
  * Purpose: Provide lightweight performance tracing for Run view critical paths.
@@ -736,6 +743,10 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
       await startAudio();
     }
   });
+
+  // Expose the startAudio / stopAudio / polyphony closures so MCP
+  // handlers can drive this same runtime instead of a parallel one.
+  _mcpController = { startAudio, stopAudio, applyPolyphonyChange };
 
   remoteSyncTimer = setInterval(syncRemoteRunState, 120);
   const firstSyncStartedAt = performance.now();
@@ -3689,6 +3700,7 @@ export function dispose() {
   lastAppliedTriggerNonce = 0;
   pendingOrbitUi = null;
   lastSpectrumSummary = null;
+  _mcpController = null;
   clearAllParamSmoothing();
 }
 
@@ -3788,6 +3800,18 @@ function setupScope(context, node, scope) {
       analyserNode.getFloatFrequencyData(freqBuffer);
       drawSpectrum(scope, freqBuffer);
     } else {
+      // Even when the user picked Waveform, keep lastSpectrumSummary
+      // fresh so MCP callers (get_spectrum, *_and_get_spectrum) always
+      // have a current snapshot. sendSpectrumSnapshot is throttled
+      // internally (~10 Hz) so the extra FFT pull is cheap.
+      analyserNode.getFloatFrequencyData(freqBuffer);
+      sendSpectrumSnapshot(scope, freqBuffer, {
+        scale: scope.spectrumScale || 'log',
+        fmin: 20,
+        fmax: scope.sampleRate / 2,
+        floorDb: -110,
+        audioQuality: lastAudioQuality || undefined
+      });
       scope.sampleCounter += buffer.length;
       const window = findTriggeredWindow(buffer, scope);
       if (window) {
@@ -3990,4 +4014,149 @@ function drawSpectrum(scope, data) {
   }
 
   drawFreqAxis(ctx, innerWidth, innerHeight, fmin, fmax, scope.spectrumScale);
+}
+
+// ---------------------------------------------------------------------
+// MCP control surface
+//
+// These exports let `webapp/handlers.js` (and through it the MCP server)
+// drive the same audio + UI runtime the human user manipulates. Every
+// write goes through `setParamValue` so the visible slider follows along
+// (it calls `faustUIInstance.paramChangeByDSP`).
+//
+// `mcpIsMounted` is the gate : it is true only between `render()` and
+// the next `dispose()`. Callers should `await mcpWaitForMount(timeoutMs)`
+// after switching to the Run view, because app.js mounts the view on its
+// own polling cadence.
+// ---------------------------------------------------------------------
+
+export function mcpIsMounted() {
+  return _mcpController !== null;
+}
+
+export async function mcpWaitForMount(timeoutMs = 3000) {
+  const start = performance.now();
+  while (!mcpIsMounted()) {
+    if (performance.now() - start > timeoutMs) {
+      throw new Error('Run view not mounted within ' + timeoutMs + 'ms');
+    }
+    await sleep(50);
+  }
+}
+
+function mcpAssertMounted() {
+  if (!mcpIsMounted()) {
+    throw new Error(
+      'Run view not mounted. Call set_view with view="run" first and ' +
+      'wait for the UI to come up.'
+    );
+  }
+}
+
+export function mcpGetSha() {
+  return currentSha;
+}
+
+export function mcpGetUI() {
+  mcpAssertMounted();
+  return compiledUI;
+}
+
+export function mcpGetParams() {
+  mcpAssertMounted();
+  return { ...paramValues };
+}
+
+export function mcpIsAudioRunning() {
+  return audioRunning;
+}
+
+export async function mcpStartAudio() {
+  mcpAssertMounted();
+  await _mcpController.startAudio();
+}
+
+export async function mcpStopAudio() {
+  mcpAssertMounted();
+  _mcpController.stopAudio();
+}
+
+export function mcpSetParam(path, value) {
+  mcpAssertMounted();
+  setParamValue(path, value);
+}
+
+export async function mcpTriggerButton(path, holdMs = 80) {
+  mcpAssertMounted();
+  if (!audioRunning) await _mcpController.startAudio();
+  await executeLocalTrigger(path, holdMs);
+}
+
+export function mcpGetPolyphony() {
+  return polyVoices;
+}
+
+export async function mcpSetPolyphony(voices) {
+  mcpAssertMounted();
+  await _mcpController.applyPolyphonyChange(voices);
+}
+
+export async function mcpSendMidi(ev) {
+  mcpAssertMounted();
+  const action = ev && ev.action;
+  const note = Number(ev && ev.note);
+  const velocity = typeof ev?.velocity === 'number' ? ev.velocity : 0.8;
+  const holdMs = typeof ev?.holdMs === 'number' ? ev.holdMs : 120;
+  if (!audioRunning && (action === 'on' || action === 'pulse')) {
+    await _mcpController.startAudio();
+  }
+  if (action === 'on') {
+    noteOnMidi(note, velocity);
+  } else if (action === 'off') {
+    noteOffMidi(note);
+  } else if (action === 'pulse') {
+    noteOnMidi(note, velocity);
+    await sleep(Math.max(1, Math.min(5000, holdMs)));
+    noteOffMidi(note);
+  } else {
+    throw new Error('Invalid MIDI action (expected on/off/pulse)');
+  }
+}
+
+export function mcpGetLatestSpectrum() {
+  if (!audioRunning) {
+    throw new Error('Spectrum not available — audio not running');
+  }
+  if (!lastSpectrumSummary) {
+    throw new Error('Spectrum not yet captured — wait a few hundred ms after starting audio');
+  }
+  return lastSpectrumSummary;
+}
+
+export async function mcpCaptureSpectrumSeries({ settleMs = 0, captureMs = 300, sampleEveryMs = 80, maxFrames = 10 } = {}) {
+  mcpAssertMounted();
+  if (!audioRunning) {
+    throw new Error('Capture requested but audio is not running');
+  }
+  if (settleMs > 0) await sleep(settleMs);
+  const start = performance.now();
+  const series = [];
+  while (series.length < maxFrames) {
+    const elapsed = performance.now() - start;
+    if (elapsed > captureMs) break;
+    if (lastSpectrumSummary) {
+      series.push({ tMs: Math.round(elapsed), summary: lastSpectrumSummary });
+    }
+    await sleep(sampleEveryMs);
+  }
+  if (series.length === 0) {
+    throw new Error('No spectrum summary captured');
+  }
+  return {
+    series,
+    aggregate: {
+      mode: 'max_hold',
+      summary: aggregateMaxHold(series.map((s) => s.summary))
+    }
+  };
 }

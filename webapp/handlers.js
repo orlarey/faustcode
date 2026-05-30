@@ -11,11 +11,13 @@ import {
   hasSession,
   listSessions,
   storeSession,
-  setActiveSha1,
   getActiveSha1,
   getActiveView,
-  setActiveView,
 } from './sessions.js';
+import {
+  shimSetActiveSha,
+  shimSetActiveView,
+} from './api-shim.js';
 import {
   searchFaustLib,
   getFaustSymbol,
@@ -25,20 +27,21 @@ import {
   ONBOARDING_GUIDE,
 } from './faust-doc.js';
 import {
-  startAudio,
-  stopAudio,
-  toggleAudio,
-  isRunning,
-  getDspUI,
-  getDspParams,
-  setDspParam,
-  triggerButton,
-  getPolyphony,
-  setPolyphony,
-  getLatestSpectrum,
-  captureSpectrumSeries,
-  sendMidi,
-} from './audio-engine.js';
+  mcpIsMounted,
+  mcpWaitForMount,
+  mcpStartAudio,
+  mcpStopAudio,
+  mcpIsAudioRunning,
+  mcpGetUI,
+  mcpGetParams,
+  mcpSetParam,
+  mcpTriggerButton,
+  mcpGetPolyphony,
+  mcpSetPolyphony,
+  mcpGetLatestSpectrum,
+  mcpCaptureSpectrumSeries,
+  mcpSendMidi,
+} from './views/run.js';
 
 /**
  * dispatch(req) — entry point called from ws-client.js.
@@ -135,7 +138,7 @@ async function submit(args) {
   // Idempotent fast path : same code already submitted → reuse the entry.
   const existing = getSession(sha1);
   if (existing) {
-    setActiveSha1(sha1);
+    shimSetActiveSha(sha1);
     return {
       sha1,
       errors: existing.errors,
@@ -209,7 +212,7 @@ async function submit(args) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
-    setActiveSha1(sha1);
+    shimSetActiveSha(sha1);
   }
 
   return { sha1, errors, persisted, persistOnSuccessOnly };
@@ -243,7 +246,7 @@ async function set_session(args) {
   if (!sha1) throw new Error('Missing `sha1`');
   const session = getSession(sha1);
   if (!session) throw new Error(`Session not found: ${sha1}`);
-  setActiveSha1(sha1);
+  shimSetActiveSha(sha1);
   return { sha1, filename: session.filename };
 }
 
@@ -266,18 +269,18 @@ async function prev_session() {
   const sessions = listSessions();
   const activeSha1 = getActiveSha1();
   if (sessions.length === 0) {
-    setActiveSha1(null);
+    shimSetActiveSha(null);
     return { sha1: null, filename: null };
   }
   if (!activeSha1) {
     const last = sessions[sessions.length - 1];
-    setActiveSha1(last.sha1);
+    shimSetActiveSha(last.sha1);
     return { sha1: last.sha1, filename: last.filename };
   }
   const idx = sessions.findIndex((s) => s.sha1 === activeSha1);
   if (idx > 0) {
     const prev = sessions[idx - 1];
-    setActiveSha1(prev.sha1);
+    shimSetActiveSha(prev.sha1);
     return { sha1: prev.sha1, filename: prev.filename };
   }
   // Already at the first session — stay put (matches mcp.mjs).
@@ -288,29 +291,29 @@ async function next_session() {
   const sessions = listSessions();
   const activeSha1 = getActiveSha1();
   if (sessions.length === 0) {
-    setActiveSha1(null);
+    shimSetActiveSha(null);
     return { sha1: null, filename: null };
   }
   if (!activeSha1) {
     const first = sessions[0];
-    setActiveSha1(first.sha1);
+    shimSetActiveSha(first.sha1);
     return { sha1: first.sha1, filename: first.filename };
   }
   const idx = sessions.findIndex((s) => s.sha1 === activeSha1);
   if (idx >= 0 && idx < sessions.length - 1) {
     const nxt = sessions[idx + 1];
-    setActiveSha1(nxt.sha1);
+    shimSetActiveSha(nxt.sha1);
     return { sha1: nxt.sha1, filename: nxt.filename };
   }
   // Past the last session → empty session (matches mcp.mjs).
-  setActiveSha1(null);
+  shimSetActiveSha(null);
   return { sha1: null, filename: null };
 }
 
 async function set_view(args) {
   const view = typeof args.view === 'string' ? args.view : '';
   if (!view) throw new Error('Missing `view`');
-  setActiveView(view); // throws on invalid view
+  shimSetActiveView(view); // throws on invalid view
   return { view: getActiveView() };
 }
 
@@ -352,9 +355,8 @@ async function get_view_content() {
     case 'run': {
       // tools.json says : "For view=run, returns the latest spectrum
       // summary." Delegate to the same cache get_spectrum reads.
-      const cache = getLatestSpectrum();
-      if (!cache) throw new Error('Run spectrum not available — start audio first');
-      return { view: 'run', mime: 'application/json', content: cache };
+      await ensureRunViewMounted();
+      return { view: 'run', mime: 'application/json', content: mcpGetLatestSpectrum() };
     }
     default:
       throw new Error(`Unsupported view: ${view}`);
@@ -399,21 +401,34 @@ function activeSha1OrThrow() {
   return sha1;
 }
 
+// Ensure the Run view is the active view AND has been mounted by
+// app.js. set_view alone only updates sessions state ; app.js mounts
+// the view on its next pollState tick (every 1.5 s). MCP audio handlers
+// need the actual mount so the DSP node, faustUIInstance and analyser
+// are live.
+async function ensureRunViewMounted() {
+  if (getActiveView() !== 'run') {
+    shimSetActiveView('run');
+  }
+  if (!mcpIsMounted()) {
+    await mcpWaitForMount(3500);
+  }
+}
+
 async function run_audio(args) {
   const state = typeof args.state === 'string' ? args.state : '';
   if (!['on', 'off', 'toggle'].includes(state)) {
     throw new Error('Invalid state (expected on/off/toggle)');
   }
-  if (state === 'on') await startAudio();
-  else if (state === 'off') await stopAudio();
-  else await toggleAudio();
-  const sha1 = getActiveSha1();
+  await ensureRunViewMounted();
+  const action = state === 'on' ? 'start' : state === 'off' ? 'stop' : 'toggle';
+  if (state === 'on') await mcpStartAudio();
+  else if (state === 'off') await mcpStopAudio();
+  else if (mcpIsAudioRunning()) await mcpStopAudio();
+  else await mcpStartAudio();
   return {
-    sha1: sha1 || null,
-    runTransport: {
-      action: state === 'on' ? 'start' : state === 'off' ? 'stop' : 'toggle',
-      nonce: Date.now(),
-    },
+    sha1: getActiveSha1() || null,
+    runTransport: { action, nonce: Date.now() },
     state,
   };
 }
@@ -424,9 +439,11 @@ async function run_transport(args) {
   if (!['start', 'stop', 'toggle'].includes(action)) {
     throw new Error('Invalid action (expected start/stop/toggle)');
   }
-  if (action === 'start') await startAudio();
-  else if (action === 'stop') await stopAudio();
-  else await toggleAudio();
+  await ensureRunViewMounted();
+  if (action === 'start') await mcpStartAudio();
+  else if (action === 'stop') await mcpStopAudio();
+  else if (mcpIsAudioRunning()) await mcpStopAudio();
+  else await mcpStartAudio();
   return {
     sha1: getActiveSha1() || null,
     runTransport: { action, nonce: Date.now() },
@@ -435,15 +452,14 @@ async function run_transport(args) {
 
 async function get_run_ui() {
   const sha1 = activeSha1OrThrow();
-  // If audio never started, compile lazily via a brief startAudio dry run.
-  // The cheaper path is to surface a clear error and let the IA call
-  // run_audio("on") first — matches the onboarding workflow.
-  return { sha1, ui: getDspUI() };
+  await ensureRunViewMounted();
+  return { sha1, ui: mcpGetUI() };
 }
 
 async function get_run_params() {
   const sha1 = activeSha1OrThrow();
-  return { sha1, params: getDspParams() };
+  await ensureRunViewMounted();
+  return { sha1, params: mcpGetParams() };
 }
 
 async function set_run_param(args) {
@@ -451,7 +467,8 @@ async function set_run_param(args) {
   const value = typeof args.value === 'number' ? args.value : NaN;
   if (!path) throw new Error('Missing path');
   if (!Number.isFinite(value)) throw new Error('Missing or non-numeric value');
-  setDspParam(path, value);
+  await ensureRunViewMounted();
+  mcpSetParam(path, value);
   return { sha1: getActiveSha1() || null, path, value };
 }
 
@@ -459,20 +476,21 @@ async function trigger_button(args) {
   const path = typeof args.path === 'string' ? args.path : '';
   if (!path) throw new Error('Missing path');
   const holdMs = typeof args.holdMs === 'number' ? args.holdMs : 80;
-  if (!isRunning()) await startAudio();
-  await triggerButton(path, holdMs);
+  await ensureRunViewMounted();
+  await mcpTriggerButton(path, holdMs);
   return { path, holdMs, triggered: true };
 }
 
 async function get_polyphony() {
-  return { sha1: getActiveSha1() || null, voices: getPolyphony() };
+  return { sha1: getActiveSha1() || null, voices: mcpGetPolyphony() };
 }
 
 async function set_polyphony(args) {
   const voices = Number(args.voices);
   const allowed = new Set([0, 1, 2, 4, 8, 16, 32, 64]);
   if (!allowed.has(voices)) throw new Error(`Invalid voices: ${args.voices}`);
-  await setPolyphony(voices);
+  await ensureRunViewMounted();
+  await mcpSetPolyphony(voices);
   return { sha1: getActiveSha1() || null, voices };
 }
 
@@ -497,17 +515,13 @@ const SPECTRUM_DEFAULTS = {
 };
 
 async function get_spectrum() {
-  const cache = getLatestSpectrum();
-  if (!cache) throw new Error('Spectrum not available — start audio first');
-  return { mime: 'application/json', content: cache };
+  await ensureRunViewMounted();
+  return { mime: 'application/json', content: mcpGetLatestSpectrum() };
 }
 
 async function get_audio_snapshot(args) {
   // Compatibility tool — returns the latest spectrum content.
-  const cache = getLatestSpectrum();
-  if (!cache) {
-    throw new Error('Audio snapshot not available. Ensure run audio is on.');
-  }
+  await ensureRunViewMounted();
   return {
     compatibility: true,
     tool: 'get_audio_snapshot',
@@ -517,7 +531,7 @@ async function get_audio_snapshot(args) {
       format: typeof args.format === 'string' ? args.format : undefined,
     },
     mime: 'application/json',
-    content: cache,
+    content: mcpGetLatestSpectrum(),
   };
 }
 
@@ -528,10 +542,10 @@ async function set_run_param_and_get_spectrum(args) {
   if (!Number.isFinite(value)) throw new Error('Missing or non-numeric value');
   const opts = pickCaptureOpts(args, SPECTRUM_DEFAULTS);
 
-  if (!isRunning()) await startAudio();
-  setDspParam(path, value);
-  if (opts.settleMs > 0) await sleep(opts.settleMs);
-  const { series, aggregate } = await captureSpectrumSeries(opts);
+  await ensureRunViewMounted();
+  if (!mcpIsAudioRunning()) await mcpStartAudio();
+  mcpSetParam(path, value);
+  const { series, aggregate } = await mcpCaptureSpectrumSeries(opts);
   return {
     path,
     value,
@@ -549,10 +563,11 @@ async function trigger_button_and_get_spectrum(args) {
   const holdMs = typeof args.holdMs === 'number' ? args.holdMs : 80;
   const opts = pickCaptureOpts(args, { ...SPECTRUM_DEFAULTS, settleMs: 0, captureMs: 400 });
 
-  if (!isRunning()) await startAudio();
+  await ensureRunViewMounted();
+  if (!mcpIsAudioRunning()) await mcpStartAudio();
   // Kick off capture first, then trigger, so we record the transient.
-  const capturePromise = captureSpectrumSeries(opts);
-  await triggerButton(path, holdMs);
+  const capturePromise = mcpCaptureSpectrumSeries(opts);
+  await mcpTriggerButton(path, holdMs);
   const { series, aggregate } = await capturePromise;
   return {
     path,
@@ -562,10 +577,6 @@ async function trigger_button_and_get_spectrum(args) {
     series,
     aggregate,
   };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ---------------------------------------------------------------------
@@ -581,10 +592,10 @@ function makeMidiEvent(action, note, velocity, holdMs) {
 }
 
 async function midi_note_on(args) {
-  if (!isRunning()) await startAudio();
+  await ensureRunViewMounted();
   const note = Number(args.note);
   const velocity = typeof args.velocity === 'number' ? args.velocity : 0.8;
-  await sendMidi({ action: 'on', note, velocity });
+  await mcpSendMidi({ action: 'on', note, velocity });
   return {
     sha1: getActiveSha1() || null,
     midi: makeMidiEvent('on', note, velocity),
@@ -593,9 +604,9 @@ async function midi_note_on(args) {
 }
 
 async function midi_note_off(args) {
-  if (!isRunning()) await startAudio();
+  await ensureRunViewMounted();
   const note = Number(args.note);
-  await sendMidi({ action: 'off', note });
+  await mcpSendMidi({ action: 'off', note });
   return {
     sha1: getActiveSha1() || null,
     midi: makeMidiEvent('off', note),
@@ -604,11 +615,11 @@ async function midi_note_off(args) {
 }
 
 async function midi_note_pulse(args) {
-  if (!isRunning()) await startAudio();
+  await ensureRunViewMounted();
   const note = Number(args.note);
   const velocity = typeof args.velocity === 'number' ? args.velocity : 0.8;
   const holdMs = typeof args.holdMs === 'number' ? args.holdMs : 120;
-  await sendMidi({ action: 'pulse', note, velocity, holdMs });
+  await mcpSendMidi({ action: 'pulse', note, velocity, holdMs });
   return {
     sha1: getActiveSha1() || null,
     midi: makeMidiEvent('pulse', note, velocity, holdMs),
@@ -617,13 +628,12 @@ async function midi_note_pulse(args) {
 }
 
 async function midi_note_on_and_get_spectrum(args) {
-  if (!isRunning()) await startAudio();
+  await ensureRunViewMounted();
   const note = Number(args.note);
   const velocity = typeof args.velocity === 'number' ? args.velocity : 0.8;
   const opts = pickCaptureOpts(args, SPECTRUM_DEFAULTS);
-  await sendMidi({ action: 'on', note, velocity });
-  if (opts.settleMs > 0) await sleep(opts.settleMs);
-  const { series, aggregate } = await captureSpectrumSeries(opts);
+  await mcpSendMidi({ action: 'on', note, velocity });
+  const { series, aggregate } = await mcpCaptureSpectrumSeries(opts);
   return {
     sent: { action: 'on', note, velocity },
     settleMs: opts.settleMs,
@@ -636,12 +646,11 @@ async function midi_note_on_and_get_spectrum(args) {
 }
 
 async function midi_note_off_and_get_spectrum(args) {
-  if (!isRunning()) await startAudio();
+  await ensureRunViewMounted();
   const note = Number(args.note);
   const opts = pickCaptureOpts(args, { ...SPECTRUM_DEFAULTS, settleMs: 80 });
-  await sendMidi({ action: 'off', note });
-  if (opts.settleMs > 0) await sleep(opts.settleMs);
-  const { series, aggregate } = await captureSpectrumSeries(opts);
+  await mcpSendMidi({ action: 'off', note });
+  const { series, aggregate } = await mcpCaptureSpectrumSeries(opts);
   return {
     sent: { action: 'off', note },
     settleMs: opts.settleMs,
@@ -654,14 +663,14 @@ async function midi_note_off_and_get_spectrum(args) {
 }
 
 async function midi_note_pulse_and_get_spectrum(args) {
-  if (!isRunning()) await startAudio();
+  await ensureRunViewMounted();
   const note = Number(args.note);
   const velocity = typeof args.velocity === 'number' ? args.velocity : 0.8;
   const holdMs = typeof args.holdMs === 'number' ? args.holdMs : 120;
   const opts = pickCaptureOpts(args, { ...SPECTRUM_DEFAULTS, captureMs: 400, settleMs: 0 });
   // Start capture FIRST so the note onset is recorded.
-  const capturePromise = captureSpectrumSeries(opts);
-  await sendMidi({ action: 'pulse', note, velocity, holdMs });
+  const capturePromise = mcpCaptureSpectrumSeries(opts);
+  await mcpSendMidi({ action: 'pulse', note, velocity, holdMs });
   const { series, aggregate } = await capturePromise;
   return {
     sent: { action: 'pulse', note, velocity, holdMs },

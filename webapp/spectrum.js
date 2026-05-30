@@ -2,7 +2,7 @@
 // AnalyserNode snapshot (freq dB + time domain). Spec : SPECIFICATION_SPECTRUM.md.
 //
 // All public state is in the function arguments — this module has no
-// hidden globals. Callers (audio-engine.js) pass the latest summary
+// hidden globals. Callers (views/run.js) pass the latest summary
 // back in so the `delta` block can be filled.
 
 const FFT_SIZE = 2048;

@@ -5,6 +5,7 @@ Thumbs.db
 # --- Editor / IDE state -------------------------------------------
 .vscode/
 .idea/
+.claude/
 *.swp
 *~
 
