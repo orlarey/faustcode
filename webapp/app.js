@@ -83,7 +83,7 @@ function logAppPerf(stage, startMs = null, details = '') {
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
 async function loadViews() {
-  const viewModules = ['dsp', 'svg', 'run', 'cpp', 'tasks', 'signals'];
+  const viewModules = ['dsp', 'svg', 'run', 'tasks', 'signals'];
 
   for (const viewName of viewModules) {
     try {
@@ -1320,7 +1320,7 @@ function ensurePasteSink() {
  */
 function captureScrollLine() {
   if (!state.currentSha) return;
-  if (state.currentView !== 'dsp' && state.currentView !== 'cpp') return;
+  if (state.currentView !== 'dsp') return;
   const content = viewContainer.querySelector('.code-content');
   if (!content) return;
   const lineHeight = parseFloat(getComputedStyle(content).lineHeight) || 16;
@@ -1424,10 +1424,7 @@ async function downloadCurrentViewArtifact(format = '') {
   let url = `/api/${session.sha1}/download/dsp`;
   let filename = `${base}.dsp`;
 
-  if (state.currentView === 'cpp') {
-    url = `/api/${session.sha1}/download/cpp`;
-    filename = `${base}.cpp`;
-  } else if (state.currentView === 'signals') {
+  if (state.currentView === 'signals') {
     url = `/api/${session.sha1}/download/signals`;
     filename = `${base}-sig.dot`;
   } else if (state.currentView === 'tasks') {

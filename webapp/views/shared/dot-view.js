@@ -144,8 +144,8 @@ async function ensureViz() {
       if (!window.Module.TOTAL_MEMORY || window.Module.TOTAL_MEMORY < VIZ_TOTAL_MEMORY) {
         window.Module.TOTAL_MEMORY = VIZ_TOTAL_MEMORY;
       }
-      await loadScriptOnce('/vendor/viz.js/viz.js');
-      await loadScriptOnce('/vendor/viz.js/full.render.js');
+      await loadScriptOnce('./vendor/viz.js/viz.js');
+      await loadScriptOnce('./vendor/viz.js/full.render.js');
       if (!window.Viz) {
         throw new Error('viz.js did not expose Viz');
       }

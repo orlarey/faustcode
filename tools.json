@@ -10,7 +10,7 @@
     "View": {
       "type": "string",
       "enum": ["dsp", "svg", "run", "signals", "tasks"],
-      "description": "Active view. The 'cpp' view of the Docker version is out of scope in standalone (cf. SPECIFICATION-STANDALONE.md §Hors-périmètre)."
+      "description": "Active view. C++ code generation is out of scope in faustcode."
     },
     "SessionMeta": {
       "type": "object",
@@ -405,7 +405,7 @@
 
     {
       "name": "set_view",
-      "description": "Set current view. Note: 'cpp' has been removed in the standalone version.",
+      "description": "Set current view.",
       "stability": "stable",
       "inputSchema": {
         "type": "object",

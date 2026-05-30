@@ -123,8 +123,8 @@ function safeDspName(name) {
  * and get_errors can read from later. SVG / signals.dot / tasks.dot are
  * generated up-front (cheap, <50 ms on typical DSPs per the POC).
  *
- * The cpp artifact is NOT produced — see SPECIFICATION-STANDALONE.md
- * §Hors-périmètre.
+ * The cpp artifact is NOT produced — C++ code generation is out of
+ * scope in faustcode.
  */
 async function submit(args) {
   const code = typeof args.code === 'string' ? args.code : '';
