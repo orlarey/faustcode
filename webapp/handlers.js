@@ -11,12 +11,15 @@ import {
   hasSession,
   listSessions,
   storeSession,
+  deleteSession,
   getActiveSha1,
   getActiveView,
+  getSessionOrder,
 } from './sessions.js';
 import {
   shimSetActiveSha,
   shimSetActiveView,
+  shimSetSessionOrder,
 } from './api-shim.js';
 import {
   searchFaustLib,
@@ -250,64 +253,116 @@ async function set_session(args) {
   return { sha1, filename: session.filename };
 }
 
+// Return sessions in the display order the human user sees, governed by
+// the current sessionOrder preference :
+//   - 'chronological' = newest first (by createdAt DESC)
+//   - 'usage'         = highest cumulative usage_score first, tie-break
+//                       by lastUsedAt DESC
+// prev_session / next_session traverse this list "as if" the IA clicked
+// the UI arrows, so the agent's navigation matches what the user
+// experiences.
+function displayOrderedSessions() {
+  const all = listSessions();
+  if (getSessionOrder() === 'usage') {
+    return all.slice().sort((a, b) => {
+      const ds = (Number(b.usageScore) || 0) - (Number(a.usageScore) || 0);
+      if (ds !== 0) return ds;
+      return (Number(b.lastUsedAt) || 0) - (Number(a.lastUsedAt) || 0);
+    });
+  }
+  // chronological → newest first
+  return all.slice().reverse();
+}
+
 async function list_sessions() {
   // tools.json says SessionMeta. We project the in-memory entry onto
   // that shape (kind defaults to "static" since live sessions are
-  // out of scope in faustcode).
-  const sessions = listSessions().map((e) => ({
+  // out of scope in faustcode). Returned in the current display order.
+  const sessions = displayOrderedSessions().map((e) => ({
     sha1: e.sha1,
     filename: e.filename,
     kind: 'static',
     compilation_time: e.createdAt,
     last_used_time: e.lastUsedAt,
-    usage_score: 0,
+    usage_score: Number(e.usageScore) || 0,
   }));
-  return { sessions };
+  return { sessions, order: getSessionOrder() };
 }
 
 async function prev_session() {
-  const sessions = listSessions();
+  const sessions = displayOrderedSessions();
   const activeSha1 = getActiveSha1();
   if (sessions.length === 0) {
     shimSetActiveSha(null);
     return { sha1: null, filename: null };
   }
   if (!activeSha1) {
-    const last = sessions[sessions.length - 1];
-    shimSetActiveSha(last.sha1);
-    return { sha1: last.sha1, filename: last.filename };
+    // From the empty slot, "prev" jumps to the top of the display
+    // (newest in chronological, highest-scored in usage).
+    const top = sessions[0];
+    shimSetActiveSha(top.sha1);
+    return { sha1: top.sha1, filename: top.filename };
   }
   const idx = sessions.findIndex((s) => s.sha1 === activeSha1);
-  if (idx > 0) {
-    const prev = sessions[idx - 1];
+  if (idx >= 0 && idx < sessions.length - 1) {
+    // Step toward the bottom = older (chrono) / lower score (usage).
+    const prev = sessions[idx + 1];
     shimSetActiveSha(prev.sha1);
     return { sha1: prev.sha1, filename: prev.filename };
   }
-  // Already at the first session — stay put (matches mcp.mjs).
+  // Already at the bottom of the display — stay put.
   return { sha1: activeSha1, filename: sessions[idx]?.filename || null };
 }
 
 async function next_session() {
-  const sessions = listSessions();
+  const sessions = displayOrderedSessions();
   const activeSha1 = getActiveSha1();
   if (sessions.length === 0) {
     shimSetActiveSha(null);
     return { sha1: null, filename: null };
   }
   if (!activeSha1) {
-    const first = sessions[0];
-    shimSetActiveSha(first.sha1);
-    return { sha1: first.sha1, filename: first.filename };
+    // From the empty slot, "next" jumps to the bottom of the display
+    // (oldest in chronological, lowest-scored in usage).
+    const bot = sessions[sessions.length - 1];
+    shimSetActiveSha(bot.sha1);
+    return { sha1: bot.sha1, filename: bot.filename };
   }
   const idx = sessions.findIndex((s) => s.sha1 === activeSha1);
-  if (idx >= 0 && idx < sessions.length - 1) {
-    const nxt = sessions[idx + 1];
+  if (idx > 0) {
+    // Step toward the top = newer (chrono) / higher score (usage).
+    const nxt = sessions[idx - 1];
     shimSetActiveSha(nxt.sha1);
     return { sha1: nxt.sha1, filename: nxt.filename };
   }
-  // Past the last session → empty session (matches mcp.mjs).
+  // Past the top of the display → empty session.
   shimSetActiveSha(null);
   return { sha1: null, filename: null };
+}
+
+async function get_session_order() {
+  return { order: getSessionOrder() };
+}
+
+async function set_session_order(args) {
+  const order = typeof args.order === 'string' ? args.order : '';
+  if (order !== 'chronological' && order !== 'usage') {
+    throw new Error('Invalid order (expected "chronological" or "usage")');
+  }
+  shimSetSessionOrder(order);
+  return { order };
+}
+
+async function delete_session(args) {
+  const sha1 = typeof args.sha1 === 'string' ? args.sha1 : '';
+  if (!sha1) throw new Error('Missing `sha1`');
+  const had = await deleteSession(sha1);
+  if (!had) throw new Error(`Session not found: ${sha1}`);
+  // If the deleted session was the active one, drop active too.
+  if (getActiveSha1() === sha1) {
+    shimSetActiveSha(null);
+  }
+  return { sha1, deleted: true };
 }
 
 async function set_view(args) {
@@ -692,6 +747,9 @@ const HANDLERS = {
   list_sessions,
   prev_session,
   next_session,
+  delete_session,
+  get_session_order,
+  set_session_order,
   // View
   set_view,
   get_view_content,

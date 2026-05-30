@@ -347,15 +347,16 @@
     },
     {
       "name": "list_sessions",
-      "description": "List sessions (creation order).",
+      "description": "List sessions in the current display order (chronological = newest first, usage = highest cumulative usage_score first). Order is set by set_session_order.",
       "stability": "stable",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "outputSchema": {
         "type": "object",
         "properties": {
-          "sessions": { "type": "array", "items": { "$ref": "#/$defs/SessionMeta" } }
+          "sessions": { "type": "array", "items": { "$ref": "#/$defs/SessionMeta" } },
+          "order": { "type": "string", "enum": ["chronological", "usage"] }
         },
-        "required": ["sessions"]
+        "required": ["sessions", "order"]
       }
     },
     {
@@ -378,7 +379,7 @@
     },
     {
       "name": "prev_session",
-      "description": "Move to previous session (creation order).",
+      "description": "Move to the previous session in the current display order (step toward older / lower-usage). At the bottom of the list, stays put.",
       "stability": "stable",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "outputSchema": {
@@ -391,7 +392,7 @@
     },
     {
       "name": "next_session",
-      "description": "Move to next session (creation order) or empty.",
+      "description": "Move to the next session in the current display order (step toward newer / higher-usage). Past the top, wraps to the empty session.",
       "stability": "stable",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "outputSchema": {
@@ -400,6 +401,58 @@
           "sha1": { "anyOf": [{ "$ref": "#/$defs/Sha1" }, { "type": "null" }] },
           "filename": { "type": ["string", "null"] }
         }
+      }
+    },
+    {
+      "name": "delete_session",
+      "description": "Delete a session by sha1 (removes from cache and OPFS). If the deleted session was active, active becomes null.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "sha1": { "$ref": "#/$defs/Sha1" } },
+        "required": ["sha1"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sha1": { "$ref": "#/$defs/Sha1" },
+          "deleted": { "type": "boolean" }
+        },
+        "required": ["sha1", "deleted"]
+      }
+    },
+    {
+      "name": "get_session_order",
+      "description": "Get the current session display order ('chronological' = newest first, 'usage' = highest usage_score first).",
+      "stability": "stable",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "order": { "type": "string", "enum": ["chronological", "usage"] }
+        },
+        "required": ["order"]
+      }
+    },
+    {
+      "name": "set_session_order",
+      "description": "Set the session display order. Affects list_sessions, prev_session and next_session, and mirrors the UI '⏱ / ★' indicator the human user sees.",
+      "stability": "stable",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "order": { "type": "string", "enum": ["chronological", "usage"] }
+        },
+        "required": ["order"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "order": { "type": "string", "enum": ["chronological", "usage"] }
+        },
+        "required": ["order"]
       }
     },
 

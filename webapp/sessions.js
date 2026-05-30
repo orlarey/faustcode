@@ -66,6 +66,9 @@ export function initSessions() {
         if (typeof prefs.lastMcpUrl === 'string') {
           _lastMcpUrl = prefs.lastMcpUrl;
         }
+        if (typeof prefs.sessionOrder === 'string' && VALID_ORDERS.has(prefs.sessionOrder)) {
+          _sessionOrder = prefs.sessionOrder;
+        }
       }
 
       _initDone = true;
@@ -128,17 +131,31 @@ export async function deleteSession(sha1) {
   return had;
 }
 
+// Debounce window per sha1 — matches the Docker faustforge behaviour
+// where two touch events within 700 ms count as one usage.
+const _lastTouchAt = new Map();
+const TOUCH_DEBOUNCE_MS = 700;
+
 /**
- * touchSession is fire-and-forget : we update the in-memory lastUsedAt
- * immediately and schedule the OPFS rewrite without awaiting it. Used on
- * every set_session / set_active_view call where blocking the handler
- * for an I/O would be silly.
+ * touchSession is fire-and-forget : we update lastUsedAt, bump the
+ * cumulative usageScore by `weight`, and schedule the OPFS rewrite
+ * without awaiting it. Called on every set_session / set_active_view as
+ * well as on engaged-time ticks from app.js (POST /api/{sha}/use).
+ *
+ * The cumulative-score semantics match the Docker faustforge :
+ *   score += max(0, weight) ; default weight = 1.
  */
-export function touchSession(sha1) {
+export function touchSession(sha1, weight = 1) {
   const e = STORE.get(sha1);
   if (!e) return;
-  e.lastUsedAt = Date.now();
-  opfs.touchSessionOnDisk(sha1, e.lastUsedAt).catch((err) => {
+  const now = Date.now();
+  const last = _lastTouchAt.get(sha1) || 0;
+  if (now - last < TOUCH_DEBOUNCE_MS) return;
+  _lastTouchAt.set(sha1, now);
+  e.lastUsedAt = now;
+  const w = Math.max(0, Number(weight) || 0);
+  e.usageScore = (Number(e.usageScore) || 0) + w;
+  opfs.touchSessionOnDisk(sha1, e.lastUsedAt, e.usageScore).catch((err) => {
     console.warn('[sessions] OPFS touchSession failed for', sha1, err);
   });
 }
@@ -151,7 +168,9 @@ export function touchSession(sha1) {
 let _activeSha1 = null;
 let _activeView = 'dsp';
 let _lastMcpUrl = '';
+let _sessionOrder = 'chronological';
 const VALID_VIEWS = new Set(['dsp', 'svg', 'run', 'signals', 'tasks']);
+const VALID_ORDERS = new Set(['chronological', 'usage']);
 
 export function getActiveSha1() {
   return _activeSha1;
@@ -184,6 +203,18 @@ export function setLastMcpUrl(url) {
   schedulePrefsSave();
 }
 
+export function getSessionOrder() {
+  return _sessionOrder;
+}
+
+export function setSessionOrder(order) {
+  if (!VALID_ORDERS.has(order)) {
+    throw new Error(`invalid sessionOrder: ${order}`);
+  }
+  _sessionOrder = order;
+  schedulePrefsSave();
+}
+
 // Debounce preferences writes — UI changes (clicks, set_view…) tend to
 // fire several in a row. We accept the trailing edge.
 let _prefsSaveTimer = null;
@@ -196,6 +227,7 @@ function schedulePrefsSave() {
       activeSha1: _activeSha1,
       activeView: _activeView,
       lastMcpUrl: _lastMcpUrl,
+      sessionOrder: _sessionOrder,
     }).catch((err) => {
       console.warn('[sessions] preferences save failed:', err);
     });

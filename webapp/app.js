@@ -58,7 +58,6 @@ let sessionPickerDocKeydownHandler = null;
 let sessionPickerResizeHandler = null;
 let runRenderTokenSeq = 0;
 const activeRunRenderTokenBySha = Object.create(null);
-const SESSION_ORDER_STORAGE_KEY = 'faustcode.sessionOrder.v1';
 const VIEW_FADE_DURATION_MS = 3000;
 let viewTransitionSeq = 0;
 let activeViewTransition = null;
@@ -187,30 +186,13 @@ function markSessionUsed(reason = 'ui-action', weight = 1) {
 }
 
 /**
- * Purpose: Implement `loadSessionOrderPreference` in the app flow.
- * How: Reads and updates UI, session, and backend sync state for this step.
- */
-function loadSessionOrderPreference() {
-  try {
-    const value = localStorage.getItem(SESSION_ORDER_STORAGE_KEY);
-    if (value === 'usage' || value === 'chronological') {
-      state.sessionOrder = value;
-    }
-  } catch {
-    // ignore
-  }
-}
-
-/**
- * Purpose: Implement `saveSessionOrderPreference` in the app flow.
- * How: Reads and updates UI, session, and backend sync state for this step.
+ * Purpose: Persist the session-order preference.
+ * How: Pushes it through /api/state so api-shim mirrors it into
+ *      sessions.js (which owns OPFS preferences.json now). pollState
+ *      will reconcile any MCP-driven change back to state.sessionOrder.
  */
 function saveSessionOrderPreference() {
-  try {
-    localStorage.setItem(SESSION_ORDER_STORAGE_KEY, state.sessionOrder);
-  } catch {
-    // ignore
-  }
+  syncState({ sessionOrder: state.sessionOrder });
 }
 
 /**
@@ -1515,6 +1497,21 @@ async function pollState() {
       localViewStickyUntil = 0;
     }
 
+    if (
+      (remote.sessionOrder === 'chronological' || remote.sessionOrder === 'usage')
+      && remote.sessionOrder !== state.sessionOrder
+    ) {
+      state.sessionOrder = remote.sessionOrder;
+      updateSessionOrderIndicator();
+      // Reload to apply the new order to navigation + picker.
+      await loadSessions();
+      if (state.currentSha) {
+        const idx = state.sessions.findIndex((s) => s.sha1 === state.currentSha);
+        state.sessionIndex = idx >= 0 ? idx : state.sessions.length;
+      }
+      updateSessionNavigation();
+    }
+
     if (remote.sha1 && remote.sha1 !== state.currentSha) {
       let idx = state.sessions.findIndex(s => s.sha1 === remote.sha1);
       if (idx < 0) {
@@ -1886,7 +1883,8 @@ document.addEventListener('keydown', (e) => {
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
 async function init() {
-  loadSessionOrderPreference();
+  // Initial sessionOrder will be picked up from /api/state by the first
+  // pollState tick (sessions.js loaded it from OPFS preferences.json).
   updateSessionOrderIndicator();
   await loadViews();
   await loadSessions();

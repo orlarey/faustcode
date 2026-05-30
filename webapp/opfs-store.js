@@ -194,7 +194,7 @@ export async function readSession(sha1) {
  * Update only the lastUsedAt timestamp of an existing session.
  * Cheap rewrite of metadata.json — no need to touch the artefacts.
  */
-export async function touchSessionOnDisk(sha1, lastUsedAt) {
+export async function touchSessionOnDisk(sha1, lastUsedAt, usageScore) {
   const sessionsRoot = await getSessionsRoot();
   let sessionDir;
   try {
@@ -208,6 +208,9 @@ export async function touchSessionOnDisk(sha1, lastUsedAt) {
   let meta;
   try { meta = JSON.parse(metaText); } catch { return; }
   meta.last_used_time = lastUsedAt;
+  if (typeof usageScore === 'number' && Number.isFinite(usageScore)) {
+    meta.usage_score = usageScore;
+  }
   await writeTextFile(sessionDir, METADATA_FILE, JSON.stringify(meta, null, 2));
 }
 

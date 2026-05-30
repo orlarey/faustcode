@@ -34,6 +34,8 @@ import {
   setActiveSha1,
   getActiveView,
   setActiveView,
+  getSessionOrder,
+  setSessionOrder,
   storeSession,
 } from './sessions.js';
 import { getFaust } from './faust.js';
@@ -57,15 +59,28 @@ function bumpUpdatedAt() {
  * Each call bumps updatedAt so pollState() picks up the change.
  */
 export function shimSetActiveSha(sha) {
-  if (sha !== getActiveSha1()) {
-    setActiveSha1(sha);
+  const changed = sha !== getActiveSha1();
+  if (changed) {
+    setActiveSha1(sha);  // setActiveSha1 internally calls touchSession
     bumpUpdatedAt();
+    return;
   }
+  // Same session re-selected — still counts as a usage event (matches
+  // the Docker faustforge behaviour). touchSession has its own 700 ms
+  // debounce so this is safe even when fired in tight loops.
+  if (sha) touchSession(sha);
 }
 
 export function shimSetActiveView(view) {
   if (view !== getActiveView()) {
     setActiveView(view);
+    bumpUpdatedAt();
+  }
+}
+
+export function shimSetSessionOrder(order) {
+  if (order !== getSessionOrder()) {
+    setSessionOrder(order); // throws on invalid
     bumpUpdatedAt();
   }
 }
@@ -331,6 +346,7 @@ function handleStateGet() {
     updatedAt: _updatedAt,
     sha1: getActiveSha1(),
     view: getActiveView(),
+    sessionOrder: getSessionOrder(),
     audioUnlocked: _audioUnlocked,
     runState: _runStateBySha[getActiveSha1()] || null,
   });
@@ -349,6 +365,9 @@ async function handleStatePost(init) {
   }
   if (typeof parsed.view === 'string') {
     try { setActiveView(parsed.view); } catch {}
+  }
+  if (typeof parsed.sessionOrder === 'string') {
+    try { setSessionOrder(parsed.sessionOrder); } catch {}
   }
   if (typeof parsed.audioUnlocked === 'boolean') {
     _audioUnlocked = parsed.audioUnlocked;
