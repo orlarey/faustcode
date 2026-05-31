@@ -39,7 +39,7 @@ import {
   storeSession,
 } from './sessions.js';
 import { getFaust } from './faust.js';
-import { injectLibsIntoFs, isLibFilename } from './lib-inject.js';
+import { injectLibsIntoFs, isLibFilename, LIB_INCLUDE_ARG } from './lib-inject.js';
 
 // ---------------------------------------------------------------------
 // Shared in-memory state (mirrors the Docker /api/state model).
@@ -156,8 +156,9 @@ async function compileAndStore(code, filename) {
     return { sha1, errors: '' };
   }
 
-  // Inject any current .lib sessions into the compiler FS so a .dsp
-  // that does `import("foo.lib")` finds them at /usr/share/faust/foo.lib.
+  // Inject any current .lib sessions into the dedicated user libs
+  // dir ; LIB_INCLUDE_ARG (below) makes Faust search there before
+  // falling back to the stock /usr/share/faust/ libs.
   injectLibsIntoFs(fs, listSessions());
 
   for (const p of [`/${name}-sig.dot`, `/${name}.dot`]) tryUnlink(fs, p);
@@ -176,7 +177,7 @@ async function compileAndStore(code, filename) {
   // leak out of the shim.
   let svgOk = false;
   try {
-    svgOk = compiler.generateAuxFiles(name, code, '-lang wasm -o binary -svg');
+    svgOk = compiler.generateAuxFiles(name, code, `-lang wasm -o binary -svg ${LIB_INCLUDE_ARG}`);
   } catch (err) {
     errors = compiler.getErrorMessage() || (err && err.message) || 'compilation threw';
   }
@@ -189,12 +190,12 @@ async function compileAndStore(code, filename) {
       for (const f of files) svg[f] = tryReadFile(fs, `/${name}-svg/${f}`);
     }
     try {
-      if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -sg')) {
+      if (compiler.generateAuxFiles(name, code, `-lang wasm -o binary -sg ${LIB_INCLUDE_ARG}`)) {
         signalsDot = tryReadFile(fs, `/${name}-sig.dot`);
       }
     } catch {}
     try {
-      if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -vec -tg')) {
+      if (compiler.generateAuxFiles(name, code, `-lang wasm -o binary -vec -tg ${LIB_INCLUDE_ARG}`)) {
         tasksDot = tryReadFile(fs, `/${name}.dot`);
       }
     } catch {}
@@ -424,7 +425,7 @@ async function handleVersion() {
 }
 
 function handleAppVersion() {
-  return ok({ version: '0.7.0' });
+  return ok({ version: '0.7.1' });
 }
 
 function handleFaustHelp() {

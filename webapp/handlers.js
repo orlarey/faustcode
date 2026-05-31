@@ -49,7 +49,7 @@ import { renderOffline, fingerprintRender } from './offline-render.js';
 import { encodeFloat32Wav, computePeakRms, bytesToBase64 } from './wav-encode.js';
 import { buildSpectrumSummary } from './spectrum.js';
 import { buildAudioMetrics } from './audio-metrics.js';
-import { injectLibsIntoFs, isLibFilename } from './lib-inject.js';
+import { injectLibsIntoFs, isLibFilename, LIB_INCLUDE_ARG } from './lib-inject.js';
 
 /**
  * dispatch(req) — entry point called from ws-client.js.
@@ -182,10 +182,9 @@ async function submit(args) {
     }
   }
 
-  // Make every current `.lib` session visible to the compiler via the
-  // virtual FS at /usr/share/faust/<filename> before we ask it to
-  // compile. Removes stale injected libs whose sessions have been
-  // deleted off-band.
+  // Make every current `.lib` session visible to the compiler. They
+  // land in a dedicated dir and we pass LIB_INCLUDE_ARG below so
+  // Faust looks there first ; stock libs are never touched.
   injectLibsIntoFs(fs, listSessions());
 
   // Clean any previous artefacts from a failed run.
@@ -231,7 +230,7 @@ async function submit(args) {
   // of leaking it as a JS exception.
   let svgOk = false;
   try {
-    svgOk = compiler.generateAuxFiles(name, code, '-lang wasm -o binary -svg');
+    svgOk = compiler.generateAuxFiles(name, code, `-lang wasm -o binary -svg ${LIB_INCLUDE_ARG}`);
   } catch (err) {
     errors = compiler.getErrorMessage() || (err && err.message) || 'compilation threw';
   }
@@ -245,13 +244,13 @@ async function submit(args) {
     }
     // signals.dot — output is written to /<name>-sig.dot (cf. POC).
     try {
-      if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -sg')) {
+      if (compiler.generateAuxFiles(name, code, `-lang wasm -o binary -sg ${LIB_INCLUDE_ARG}`)) {
         signalsDot = tryReadFile(fs, `/${name}-sig.dot`);
       }
     } catch {}
     // tasks.dot — output is written to /<name>.dot.
     try {
-      if (compiler.generateAuxFiles(name, code, '-lang wasm -o binary -vec -tg')) {
+      if (compiler.generateAuxFiles(name, code, `-lang wasm -o binary -vec -tg ${LIB_INCLUDE_ARG}`)) {
         tasksDot = tryReadFile(fs, `/${name}.dot`);
       }
     } catch {}

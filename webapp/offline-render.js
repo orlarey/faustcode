@@ -15,7 +15,7 @@
 // that MCP callers ask for.
 
 import { getFaust } from './faust.js';
-import { injectLibsIntoFs } from './lib-inject.js';
+import { injectLibsIntoFs, LIB_INCLUDE_ARG } from './lib-inject.js';
 import { listSessions } from './sessions.js';
 
 // Validation caps. These are sanity bounds, not real limits — they
@@ -36,8 +36,9 @@ const MAX_SAMPLE_RATE = 192_000;
  */
 async function compileFresh(code, polyVoices) {
   const faust = await getFaust();
-  // Inject user `.lib` sessions into /usr/share/faust/ before the
-  // compiler resolves any import("…").
+  // Inject user `.lib` sessions into the user libs dir before the
+  // compiler resolves any import("…"). LIB_INCLUDE_ARG below tells
+  // Faust to look there first.
   try { injectLibsIntoFs(faust.compiler.fs(), listSessions()); } catch {}
   const Generator = polyVoices > 0
     ? faust.FaustPolyDspGenerator
@@ -46,7 +47,7 @@ async function compileFresh(code, polyVoices) {
   // Compile under the same name `dsp` the run view uses, so that the
   // param paths exposed to MCP callers are identical to what they get
   // from get_run_ui — no /offline/foo vs /dsp/foo mismatch.
-  const ok = await gen.compile(faust.compiler, 'dsp', code, '-ftz 2');
+  const ok = await gen.compile(faust.compiler, 'dsp', code, `-ftz 2 ${LIB_INCLUDE_ARG}`);
   if (!ok) {
     throw new Error('Compilation failed: ' + faust.compiler.getErrorMessage());
   }

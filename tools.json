@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.7.0",
+  "contractVersion": "0.7.1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -356,7 +356,7 @@
 
     {
       "name": "submit",
-      "description": "Submit Faust code (equivalent to dropping a .dsp or .lib file). The filename's extension picks the regime : `.dsp` (default) → standalone Faust patch, sha-versioned (each submission of distinct content lives as its own session). `.lib` → reusable Faust library file ; re-submitting under the same filename REPLACES any previous .lib with that name (one entry per filename at all times) so that `import(\"foo.lib\")` from a .dsp resolves deterministically. User .lib sessions are written to /usr/share/faust/<filename> in the libfaust-wasm virtual FS before every compile, shadowing the stock library if the name collides. If persisted, the new session becomes active.",
+      "description": "Submit Faust code (equivalent to dropping a .dsp or .lib file). The filename's extension picks the regime : `.dsp` (default) → standalone Faust patch, sha-versioned (each submission of distinct content lives as its own session). `.lib` → reusable Faust library file ; re-submitting under the same filename REPLACES any previous .lib with that name (one entry per filename at all times) so that `import(\"foo.lib\")` from a .dsp resolves deterministically. User .lib sessions are written to a dedicated /faustcode-libs/ directory in the libfaust-wasm virtual FS, and compiles pass `-I /faustcode-libs/` so Faust looks there first ; this transparently shadows a stock library of the same name without touching the stock file, and falls back to the stock when the user session is deleted. If persisted, the new session becomes active.",
       "stability": "stable",
       "inputSchema": {
         "type": "object",
