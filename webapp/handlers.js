@@ -48,6 +48,7 @@ import {
 import { renderOffline, fingerprintRender } from './offline-render.js';
 import { encodeFloat32Wav, computePeakRms, bytesToBase64 } from './wav-encode.js';
 import { buildSpectrumSummary } from './spectrum.js';
+import { buildAudioMetrics } from './audio-metrics.js';
 
 /**
  * dispatch(req) — entry point called from ws-client.js.
@@ -590,7 +591,11 @@ async function get_spectrum() {
  * webapp and binary — never in Claude's context window.
  */
 async function render_audio(args) {
-  const detail = args.detail === 'wav' ? 'wav' : 'light';
+  const detail = args.detail === 'wav'
+    ? 'wav'
+    : args.detail === 'metrics'
+      ? 'metrics'
+      : 'light';
   const sha1 = activeSha1OrThrow();
   const session = getSession(sha1);
   if (!session) throw new Error(`Session not found: ${sha1}`);
@@ -638,6 +643,36 @@ async function render_audio(args) {
         channels: buffer.numberOfChannels,
         durationMs,
         analyserFftSize,
+      },
+    };
+  }
+
+  if (detail === 'metrics') {
+    // Optional metric-tuning args. All have sane defaults inside the
+    // module ; expose them so power users (Claude D) can adjust fmin /
+    // fmax / harmonics depth / roughness bands when the default
+    // klaxon-ish range is not appropriate.
+    const metricsOpts = {};
+    if (args.metricsOptions && typeof args.metricsOptions === 'object') {
+      const m = args.metricsOptions;
+      if (typeof m.fmin === 'number') metricsOpts.fmin = m.fmin;
+      if (typeof m.fmax === 'number') metricsOpts.fmax = m.fmax;
+      if (typeof m.nHarm === 'number') metricsOpts.nHarm = m.nHarm;
+      if (typeof m.plateauFrac === 'number') metricsOpts.plateauFrac = m.plateauFrac;
+      if (typeof m.plateauMinLenS === 'number') metricsOpts.plateauMinLenS = m.plateauMinLenS;
+      if (typeof m.plateauCapS === 'number') metricsOpts.plateauCapS = m.plateauCapS;
+      if (Array.isArray(m.roughnessBands)) metricsOpts.roughnessBands = m.roughnessBands;
+    }
+    const metrics = buildAudioMetrics(buffer, metricsOpts);
+    return {
+      mime: 'application/json',
+      content: metrics,
+      render: {
+        sha1,
+        fingerprint: fp,
+        sampleRate: buffer.sampleRate,
+        channels: buffer.numberOfChannels,
+        durationMs,
       },
     };
   }

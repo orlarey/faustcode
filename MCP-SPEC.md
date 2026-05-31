@@ -5,11 +5,12 @@ webapp faustcode, quel outil MCP permet à une IA de produire le même
 effet ?
 
 Snapshot pris le **2026-05-30** (révisé le **2026-05-31** : ajout puis
-retrait de `inlineAudio` après que le test côté Claude Desktop a montré
-que les blocs `AudioContent` MCP standard ne sont pas hydratés par ce
-client — cf. `DEBUG.md` §8), contrat `tools.json` version **0.4.1** (37
-outils). À refaire si on ajoute des outils ou si la webapp gagne / perd
-des surfaces.
+retrait de `inlineAudio`, puis ajout d'un niveau `detail: "metrics"` à
+`render_audio` pour fournir une analyse riche `audio_metrics_v1` —
+algorithmes alignés bit-pour-bit avec `horn_metrics.py` côté librosa
+pour qu'un client puisse comparer deux JSONs sans dérive d'algo),
+contrat `tools.json` version **0.5.0** (37 outils). À refaire si on
+ajoute des outils ou si la webapp gagne / perd des surfaces.
 
 Légende : **✓** couvert, **◐** partiellement couvert (effet équivalent
 mais sémantique différente), **✗** absent (souvent volontaire), **n/a**
@@ -86,7 +87,7 @@ cosmétique / non pertinent côté IA.
 | Action humaine | Tool MCP | État |
 |---|---|---|
 | Lire le spectre live (tap sur l'AnalyserNode du run audio) | `get_spectrum` | ✓ |
-| Rendu offline déterministe (script de gate, sampleRate configurable, sortie WAV Float32 ou spectre) | `render_audio` (`detail: light \| wav`) | ✓ |
+| Rendu offline déterministe (script de gate, sampleRate configurable, sortie WAV Float32, spectre ou analyse riche) | `render_audio` (`detail: light \| metrics \| wav`) | ✓ |
 | Changer view (Waveform/Spectrum), scale, trigger, slope, threshold, holdoff | — | ✗ UI-only |
 
 ### D.4 MIDI
@@ -176,6 +177,19 @@ cosmétique / non pertinent côté IA.
   `script` pour la symétrie avec les events suivants. **Pour qu'une transition de bouton soit
   détectable par un DSP à déclenchement (front montant)**, schedulez la transition à
   `atMs > 0` (e.g. `atMs: 10`) avec le bouton initial à `0` dans `paramSetup`.
+- **`render_audio: detail = "metrics"`** (0.5.0) : pour un feedback plus riche que
+  `light` sans le coût d'un fichier WAV. Renvoie un `audio_metrics_v1` calculé sur le
+  plateau auto-détecté du rendu : `f0Hz` avec **correction sous-harmonique** (important
+  pour les DSP où H2 ou H3 dominent H1, typique des sons cuivrés), `harmonicsDb[N]`,
+  `hnrDb` (harmonic-to-noise ratio = marqueur du souffle), `roughnessDb` par bandes
+  de modulation 5-20/20-50/50-100/100-200 Hz (capte grain/battements), et
+  `features` STFT-moyennées (`centroidHz`, `rolloff95Hz`, `flatness`) avec les mêmes
+  défauts que `librosa.feature.spectral_*` (n_fft=2048, hop=512, hann, center=True,
+  pad zero). Cross-validé sur un signal stationnaire (220+440+660 Hz) — les chiffres
+  matchent `horn_metrics.py` au bit près pour f0, harmonics, HNR, centroid, rolloff,
+  flatness. Roughness diffère de ~1 dB côté résiduel (RMS framing légèrement différent
+  côté librosa). `metricsOptions` expose les knobs (fmin, fmax, nHarm, plateau,
+  roughnessBands) pour les sons hors de la fenêtre klaxon par défaut.
 - **`render_audio` et l'accessibilité du `path`** : le fichier WAV est écrit sur le
   filesystem de l'**hôte du binaire** (`$TMPDIR/faustcode-renders/`). Pour **Claude Code**
   (modèle et binaire sur le même hôte), `librosa.load(path)` marche directement. Pour

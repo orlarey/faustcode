@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.4.1",
+  "contractVersion": "0.5.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -97,6 +97,48 @@
         "summary": { "$ref": "#/$defs/SpectrumSummary" }
       },
       "required": ["mode", "summary"]
+    },
+    "AudioMetrics": {
+      "type": "object",
+      "description": "Rich analysis of the auto-detected plateau of a render. Built by webapp/audio-metrics.js, whose algorithms mirror horn_metrics.py one-for-one (same f0 sub-harmonic rule, same window widths around k·f0, same HNR and AM-roughness band definitions) — so a caller can run horn_metrics.py on a reference audio file and diff the deltas without algorithmic drift.",
+      "properties": {
+        "type": { "const": "audio_metrics_v1" },
+        "plateau": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "number" },
+          "description": "[startSec, endSec] — auto-detected sustained portion the analysis ran on."
+        },
+        "f0Hz": {
+          "type": "number",
+          "description": "Fundamental in Hz, with sub-harmonic correction (handles DSPs where H2 / H3 dominate the spectrum, e.g. horn / brass timbres)."
+        },
+        "harmonicsDb": {
+          "type": "array",
+          "items": { "type": "number" },
+          "description": "dB level of each k·f0 for k=1..nHarm, normalised so the strongest harmonic is 0 dB. nHarm default 16."
+        },
+        "hnrDb": {
+          "type": "number",
+          "description": "Harmonic-to-noise ratio. Energy summed in narrow windows around k·f0 (±8 Hz) over energy in inter-harmonic gaps (k·f0+30..50 Hz). High values mean clean tone ; lower values mean broadband noise / breath."
+        },
+        "roughnessDb": {
+          "type": "object",
+          "description": "Amplitude-modulation depth per modulation-frequency band, in dB relative to total envelope energy. Default bands : 5-20 / 20-50 / 50-100 / 100-200 Hz. Captures beats, grain, rumble.",
+          "additionalProperties": { "type": "number" }
+        },
+        "features": {
+          "type": "object",
+          "properties": {
+            "centroidHz": { "type": "number" },
+            "rolloff95Hz": { "type": "number" },
+            "flatness": { "type": "number" }
+          },
+          "required": ["centroidHz", "rolloff95Hz", "flatness"]
+        }
+      },
+      "required": ["type", "plateau", "f0Hz", "harmonicsDb", "hnrDb", "roughnessDb", "features"]
     },
     "FaustSymbolSummary": {
       "type": "object",
@@ -912,7 +954,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "detail": { "type": "string", "enum": ["light", "wav"] },
+          "detail": {
+            "type": "string",
+            "enum": ["light", "metrics", "wav"],
+            "description": "Output flavour. `light`: spectrum_summary_v1 (fast tap near 80% of the render, low cost — good for iteration). `metrics`: audio_metrics_v1 (richer analysis on the auto-detected plateau : f0 with sub-harmonic correction, harmonics dB profile, HNR, AM roughness per band, spectral features — same definitions as horn_metrics.py so a caller can run that script on a reference file and diff against this JSON). `wav`: Float32 IEEE_FLOAT WAV written to disk, path in structured content (see description for the Claude Desktop caveat)."
+          },
           "durationMs": { "type": "number", "exclusiveMinimum": 0, "maximum": 30000 },
           "sampleRate": { "type": "number", "minimum": 8000, "maximum": 192000 },
           "channels": { "type": "integer", "minimum": 1, "maximum": 2 },
@@ -936,6 +982,29 @@
               "required": ["atMs", "path", "value"],
               "additionalProperties": false
             }
+          },
+          "metricsOptions": {
+            "type": "object",
+            "description": "Only meaningful when detail='metrics'. Override the metrics defaults — leave empty unless the default klaxon-ish window does not fit your sound.",
+            "properties": {
+              "fmin": { "type": "number", "minimum": 1, "description": "Lowest f0 candidate, Hz (default 50)." },
+              "fmax": { "type": "number", "minimum": 1, "description": "Highest f0 candidate, Hz (default 400)." },
+              "nHarm": { "type": "integer", "minimum": 1, "maximum": 64, "description": "Number of harmonics in harmonicsDb (default 16)." },
+              "plateauFrac": { "type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "RMS fraction-of-max used to delimit the sustained portion (default 0.6)." },
+              "plateauMinLenS": { "type": "number", "exclusiveMinimum": 0, "description": "Minimum plateau length in seconds (default 0.5). Plateaus shorter than this fall back to the whole buffer." },
+              "plateauCapS": { "type": "number", "exclusiveMinimum": 0, "description": "Cap on the analysed plateau length in seconds (default 2.0)." },
+              "roughnessBands": {
+                "type": "array",
+                "description": "Modulation-frequency bands, in Hz, for the roughnessDb output. Default [[5,20],[20,50],[50,100],[100,200]].",
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": { "type": "number", "minimum": 0 }
+                }
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": ["detail", "durationMs"],
@@ -957,6 +1026,24 @@
                   "channels": { "type": "integer" },
                   "durationMs": { "type": "number" },
                   "analyserFftSize": { "type": ["integer", "null"] }
+                },
+                "required": ["sha1", "fingerprint", "sampleRate", "channels", "durationMs"]
+              }
+            },
+            "required": ["mime", "content", "render"]
+          },
+          {
+            "properties": {
+              "mime": { "const": "application/json" },
+              "content": { "$ref": "#/$defs/AudioMetrics" },
+              "render": {
+                "type": "object",
+                "properties": {
+                  "sha1": { "$ref": "#/$defs/Sha1" },
+                  "fingerprint": { "type": "string" },
+                  "sampleRate": { "type": "number" },
+                  "channels": { "type": "integer" },
+                  "durationMs": { "type": "number" }
                 },
                 "required": ["sha1", "fingerprint", "sampleRate", "channels", "durationMs"]
               }
