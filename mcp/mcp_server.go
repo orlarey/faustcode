@@ -154,28 +154,13 @@ func (m *MCPServer) makeHandler(op string) mcp.ToolHandler {
 			// substitute the payload by a `path` so the MCP client
 			// (and the outputSchema) only ever see the file location.
 			result := resp.Result
-			var inlineAudioBytes []byte
 			if op == "render_audio" {
-				rewritten, audioBytes, err := processRenderAudio(result)
+				rewritten, err := processRenderAudio(result)
 				if err != nil {
 					m.log.Warn("render_audio payload handling failed", "err", err)
 					return mcpToolError(ErrCodeBadResponse, err.Error()), nil
 				}
 				result = rewritten
-				// If the caller asked for inlineAudio (and we actually
-				// have bytes from a wav render), prepare to attach a
-				// standard MCP AudioContent block — unless the blob is
-				// over the hard cap, in which case fail clean rather
-				// than risk flooding the wire.
-				if audioBytes != nil && argsBoolField(args, "inlineAudio") {
-					if len(audioBytes) > maxInlineAudioBytes {
-						return mcpToolError(ErrCodePayloadTooLarge, fmt.Sprintf(
-							"render_audio inlineAudio refused: %d WAV bytes exceeds %d B cap. Drop inlineAudio (keep path-only) or shorten the render (lower sampleRate / shorter durationMs / mono).",
-							len(audioBytes), maxInlineAudioBytes,
-						)), nil
-					}
-					inlineAudioBytes = audioBytes
-				}
 			}
 			// Validate the webapp's result against the contract
 			// outputSchema. A mismatch turns into a clean MCP error
@@ -184,7 +169,7 @@ func (m *MCPServer) makeHandler(op string) mcp.ToolHandler {
 				m.log.Warn("output schema validation failed", "op", op, "err", err)
 				return mcpToolError(ErrCodeBadResponse, err.Error()), nil
 			}
-			return mcpToolSuccessWithAudio(result, inlineAudioBytes), nil
+			return mcpToolSuccess(result), nil
 
 		case <-time.After(m.requestTimeout):
 			return mcpToolError(ErrCodeTimeout, fmt.Sprintf("no response within %s", m.requestTimeout)), nil
@@ -205,17 +190,6 @@ func (m *MCPServer) Run(ctx context.Context) error {
 // We populate StructuredContent (visible to LLMs as parsed JSON) AND a text
 // fallback (visible to clients that don't render structured content yet).
 func mcpToolSuccess(result json.RawMessage) *mcp.CallToolResult {
-	return mcpToolSuccessWithAudio(result, nil)
-}
-
-// mcpToolSuccessWithAudio is the render_audio extension : append a
-// standard MCP AudioContent (type="audio") to the Content[] when bytes
-// are provided. Spec-compliant clients are expected to materialise the
-// blob (write to disk, surface as an attachment) without dumping the
-// base64 into the LLM context. The size hard-cap is enforced by the
-// caller — by the time we are here the payload is known to be small
-// enough to ship.
-func mcpToolSuccessWithAudio(result json.RawMessage, audioBytes []byte) *mcp.CallToolResult {
 	var structured any
 	if len(result) > 0 {
 		_ = json.Unmarshal(result, &structured)
@@ -224,15 +198,8 @@ func mcpToolSuccessWithAudio(result json.RawMessage, audioBytes []byte) *mcp.Cal
 	if text == "" {
 		text = "{}"
 	}
-	content := []mcp.Content{&mcp.TextContent{Text: text}}
-	if len(audioBytes) > 0 {
-		content = append(content, &mcp.AudioContent{
-			MIMEType: "audio/wav",
-			Data:     audioBytes,
-		})
-	}
 	return &mcp.CallToolResult{
-		Content:           content,
+		Content:           []mcp.Content{&mcp.TextContent{Text: text}},
 		StructuredContent: structured,
 	}
 }

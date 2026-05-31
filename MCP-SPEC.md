@@ -4,10 +4,12 @@ Audit de couverture : pour chaque action qu'un humain peut faire dans la
 webapp faustcode, quel outil MCP permet à une IA de produire le même
 effet ?
 
-Snapshot pris le **2026-05-30** (révisé encore le **2026-05-31** après
-ajout de l'opt-in `inlineAudio` à `render_audio`), contrat `tools.json`
-version **0.4.0** (37 outils). À refaire si on ajoute des outils ou si
-la webapp gagne / perd des surfaces.
+Snapshot pris le **2026-05-30** (révisé le **2026-05-31** : ajout puis
+retrait de `inlineAudio` après que le test côté Claude Desktop a montré
+que les blocs `AudioContent` MCP standard ne sont pas hydratés par ce
+client — cf. `DEBUG.md` §8), contrat `tools.json` version **0.4.1** (37
+outils). À refaire si on ajoute des outils ou si la webapp gagne / perd
+des surfaces.
 
 Légende : **✓** couvert, **◐** partiellement couvert (effet équivalent
 mais sémantique différente), **✗** absent (souvent volontaire), **n/a**
@@ -174,18 +176,17 @@ cosmétique / non pertinent côté IA.
   `script` pour la symétrie avec les events suivants. **Pour qu'une transition de bouton soit
   détectable par un DSP à déclenchement (front montant)**, schedulez la transition à
   `atMs > 0` (e.g. `atMs: 10`) avec le bouton initial à `0` dans `paramSetup`.
-- **`render_audio: inlineAudio` (opt-in)** : ajouté en 0.4.0 pour les clients MCP dont le
-  modèle tourne dans un sandbox qui ne partage pas le filesystem du binaire (ex : Claude
-  Desktop, dont les outils tournent dans un container Linux côté Anthropic alors que le
-  binaire faustcode tourne sur le Mac de l'utilisateur). Quand `true`, le binaire — après
-  avoir écrit le fichier et inséré `path` dans la réponse structurée — attache **en plus**
-  un bloc `AudioContent` standard MCP (`type:"audio"`, `mimeType:"audio/wav"`, `data` en
-  base64) au `Content[]` du `CallToolResult`. Les clients conformes à la spec MCP
-  matérialisent ce blob comme un fichier dans leur environnement (typiquement
-  `/mnt/user-data/tool_results/`) **sans injecter la base64 dans le contexte du modèle**.
-  Hard cap à **2 MB** : au-delà, l'appel échoue avec `payload_too_large` plutôt que de
-  noyer le wire. Pour Claude Code (binaire et modèle sur le même hôte), garder le défaut
-  `false` — `path` suffit, plus rapide et sans bytes redondants.
+- **`render_audio` et l'accessibilité du `path`** : le fichier WAV est écrit sur le
+  filesystem de l'**hôte du binaire** (`$TMPDIR/faustcode-renders/`). Pour **Claude Code**
+  (modèle et binaire sur le même hôte), `librosa.load(path)` marche directement. Pour
+  **Claude Desktop** (outils du modèle dans un container Anthropic disjoint de l'hôte),
+  le `path` n'est pas atteignable depuis le sandbox et il faut que l'utilisateur upload
+  manuellement le fichier dans la conversation (drag-and-drop) pour qu'il apparaisse
+  sous `/mnt/user-data/uploads/`. La piste `AudioContent`/`EmbeddedResource` MCP standard
+  a été tentée en 0.4.0 puis retirée en 0.4.1 : ces blocs ne sont pas hydratés par
+  Claude Desktop (cf. `DEBUG.md` §8 pour les références doc Anthropic + ticket GitHub).
+  La vraie fermeture de boucle pour Claude Desktop demande un pont côté infrastructure
+  Anthropic, hors périmètre faustcode.
 
 ## Conventions
 

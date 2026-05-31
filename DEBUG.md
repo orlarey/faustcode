@@ -177,3 +177,57 @@ console.log({ centroid: sp.features.centroidHz, peak: sp.peaks[0] });
 
 Ces appels sont disponibles dès que `import('./views/run.js')` a été fait
 une fois dans la page — pas besoin de WS pour interroger.
+
+---
+
+## 8. `render_audio` et le filesystem côté Claude Desktop
+
+### Le problème
+
+`render_audio(detail: "wav")` écrit le fichier sous `$TMPDIR/faustcode-renders/<sha>-<fp>.wav`
+sur le filesystem de l'**hôte qui exécute le binaire** (= le Mac de l'utilisateur).
+
+- **Claude Code** : le modèle s'exécute sur le même hôte ; il peut `librosa.load(path)` directement. OK.
+- **Claude Desktop** : les outils du modèle (`bash`, `view`, etc.) tournent dans un **conteneur Linux côté Anthropic**, avec son propre filesystem (`/mnt/user-data/*`). Le `path` retourné par render_audio (sous `/tmp` ou `/var/folders/...` du Mac) **n'existe pas dans ce conteneur**. Claude Desktop ne peut donc pas analyser le fichier qu'il vient pourtant de demander.
+
+### Pourquoi pas `AudioContent` MCP standard (tentative 0.4.0 → 0.4.1)
+
+On a essayé d'attacher un bloc standard MCP `AudioContent` au `CallToolResult.Content[]`
+via un opt-in `inlineAudio: true`. Théorie : un client conforme à la spec MCP devrait
+matérialiser le blob comme fichier, sans pollution de contexte. Test empirique :
+
+- Render WAV à 0,8 s @ 24 kHz mono Float32 ≈ 102 000 chars base64 — sous le seuil
+  de 150 000 chars documenté par Anthropic
+- `inlineAudio: true` → **erreur dure côté Claude Desktop : "unsupported format"**,
+  et la réponse entière est invalidée (perte du `path` + des métadonnées)
+- Refaire le même appel sans `inlineAudio` → réponse OK, `path` + metadata présents
+
+Conclusion : **Claude Desktop n'hydrate aucun bloc Audio/Resource d'un résultat d'outil**,
+indépendamment de la taille. Sources :
+
+- [Anthropic — Troubleshooting MCP Apps](https://claude.com/docs/connectors/building/mcp-apps/troubleshooting) — section "App doesn't render when tool results are large" décrit le déroutage > 150 k chars vers le sandbox FS + non-hydratation
+- [anthropics/claude-ai-mcp#287](https://github.com/anthropics/claude-ai-mcp/issues/287) — ticket récent confirmant que Claude Desktop ne matérialise pas les `EmbeddedResource` retournés par les outils
+
+`inlineAudio` a été retiré en 0.4.1. **Ne pas re-tenter** sans nouvelle évidence que
+Claude Desktop a corrigé l'hydratation côté client.
+
+### Workaround pratique pour Claude Desktop
+
+L'utilisateur récupère le fichier de `$TMPDIR/faustcode-renders/` sur le Mac et le
+**drag-and-drop dans la conversation Claude Desktop**. Le fichier apparaît alors
+sous `/mnt/user-data/uploads/` et le modèle peut le `librosa.load(path)`.
+
+Le nom du fichier encode `<sha8>-<paramfp>.wav` → la traçabilité est conservée :
+l'utilisateur et Claude peuvent retrouver quel DSP + quels paramètres ont produit le
+fichier en lisant juste le path.
+
+### La vraie solution (hors périmètre faustcode)
+
+Pour fermer la boucle automatiquement côté Claude Desktop, il faudrait que la couche
+hôte Anthropic (celle qui a déjà l'accès en écriture au filestore de conversation —
+preuve : les uploads utilisateur y arrivent) intercepte le payload base64 produit par
+la webapp et l'écrive dans `tool_results/` du filestore. C'est du côté d'Anthropic,
+pas du nôtre.
+
+Pattern à plus long terme : "Code Execution with MCP" — voir le blog d'ingénierie
+Anthropic, qui pousse cette architecture.
