@@ -109,7 +109,13 @@ async function loadViews() {
 function generateViewSelect() {
   const currentSession = getCurrentSession();
   const draftOnlyDsp = isDraftLiveSession(currentSession);
-  if (draftOnlyDsp && state.currentView !== 'dsp') {
+  // .lib sessions are pure source ; no `process =`, so SVG / Diagrams /
+  // Run / Tasks / Signals would all fail. Only the DSP Code view (the
+  // editor) is meaningful on a library file.
+  const isLib = !!(currentSession && typeof currentSession.filename === 'string'
+                   && currentSession.filename.toLowerCase().endsWith('.lib'));
+  const lockedToDsp = draftOnlyDsp || isLib;
+  if (lockedToDsp && state.currentView !== 'dsp') {
     state.currentView = 'dsp';
   }
   viewSelect.innerHTML = '';
@@ -117,7 +123,7 @@ function generateViewSelect() {
     const option = document.createElement('option');
     option.value = view.id;
     option.textContent = view.name;
-    if (draftOnlyDsp && view.id !== 'dsp') {
+    if (lockedToDsp && view.id !== 'dsp') {
       option.disabled = true;
     }
     if (view.id === state.currentView) {
@@ -1375,7 +1381,7 @@ function hideInterface() {
     <div class="empty-state">
       <div class="empty-center">
         <div class="empty-icon" aria-hidden="true"></div>
-        <div class="empty-title">Drop a .dsp file here</div>
+        <div class="empty-title">Drop a .dsp or .lib file here</div>
         <div class="empty-subtitle">or paste Faust code</div>
       </div>
       <div class="empty-mcp-wrap">
@@ -1904,10 +1910,13 @@ document.addEventListener('drop', (e) => {
   dropOverlay.classList.add('hidden');
 
   const file = e.dataTransfer?.files?.[0];
-  if (file && file.name.endsWith('.dsp')) {
-    submitFile(file);
-  } else if (file) {
-    showError('Please drop a .dsp file');
+  if (file) {
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith('.dsp') || lower.endsWith('.lib')) {
+      submitFile(file);
+    } else {
+      showError('Please drop a .dsp or .lib file');
+    }
   }
 });
 

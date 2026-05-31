@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.6.0",
+  "contractVersion": "0.7.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -356,13 +356,13 @@
 
     {
       "name": "submit",
-      "description": "Submit Faust code (equivalent to dropping a .dsp file). If persisted, it becomes the active shared session.",
+      "description": "Submit Faust code (equivalent to dropping a .dsp or .lib file). The filename's extension picks the regime : `.dsp` (default) → standalone Faust patch, sha-versioned (each submission of distinct content lives as its own session). `.lib` → reusable Faust library file ; re-submitting under the same filename REPLACES any previous .lib with that name (one entry per filename at all times) so that `import(\"foo.lib\")` from a .dsp resolves deterministically. User .lib sessions are written to /usr/share/faust/<filename> in the libfaust-wasm virtual FS before every compile, shadowing the stock library if the name collides. If persisted, the new session becomes active.",
       "stability": "stable",
       "inputSchema": {
         "type": "object",
         "properties": {
           "code": { "type": "string", "minLength": 1 },
-          "filename": { "type": "string", "pattern": "\\.dsp$" },
+          "filename": { "type": "string", "pattern": "\\.(dsp|lib)$" },
           "persistOnSuccessOnly": { "type": "boolean", "default": true }
         },
         "required": ["code"],

@@ -15,6 +15,8 @@
 // that MCP callers ask for.
 
 import { getFaust } from './faust.js';
+import { injectLibsIntoFs } from './lib-inject.js';
+import { listSessions } from './sessions.js';
 
 // Validation caps. These are sanity bounds, not real limits — they
 // just protect against accidental OOM if a caller asks for a 10-minute
@@ -34,6 +36,9 @@ const MAX_SAMPLE_RATE = 192_000;
  */
 async function compileFresh(code, polyVoices) {
   const faust = await getFaust();
+  // Inject user `.lib` sessions into /usr/share/faust/ before the
+  // compiler resolves any import("…").
+  try { injectLibsIntoFs(faust.compiler.fs(), listSessions()); } catch {}
   const Generator = polyVoices > 0
     ? faust.FaustPolyDspGenerator
     : faust.FaustMonoDspGenerator;

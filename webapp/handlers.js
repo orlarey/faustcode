@@ -49,6 +49,7 @@ import { renderOffline, fingerprintRender } from './offline-render.js';
 import { encodeFloat32Wav, computePeakRms, bytesToBase64 } from './wav-encode.js';
 import { buildSpectrumSummary } from './spectrum.js';
 import { buildAudioMetrics } from './audio-metrics.js';
+import { injectLibsIntoFs, isLibFilename } from './lib-inject.js';
 
 /**
  * dispatch(req) — entry point called from ws-client.js.
@@ -112,11 +113,19 @@ function defaultFilename() {
   return `ai-${ts}.dsp`;
 }
 
-function safeDspName(name) {
+// Accepts `.dsp` and `.lib`. Other extensions are rejected explicitly
+// (caller throws). A bare name (no extension) is assumed to be a .dsp
+// to preserve the legacy behaviour of typing "patch" → "patch.dsp".
+function safeSessionName(name) {
   if (typeof name !== 'string') return defaultFilename();
   const trimmed = name.trim();
   if (!trimmed) return defaultFilename();
-  return trimmed.endsWith('.dsp') ? trimmed : `${trimmed}.dsp`;
+  const lower = trimmed.toLowerCase();
+  if (lower.endsWith('.dsp')) return trimmed;
+  if (lower.endsWith('.lib')) return trimmed;
+  // Bare names → .dsp by convention.
+  if (!lower.includes('.')) return `${trimmed}.dsp`;
+  throw new Error(`Unsupported file extension : ${trimmed} (only .dsp and .lib are accepted)`);
 }
 
 // ---------------------------------------------------------------------
@@ -137,7 +146,7 @@ async function submit(args) {
   const code = typeof args.code === 'string' ? args.code : '';
   if (!code) throw new Error('Missing or empty `code`');
 
-  const filename = safeDspName(args.filename);
+  const filename = safeSessionName(args.filename);
   const persistOnSuccessOnly =
     typeof args.persistOnSuccessOnly === 'boolean' ? args.persistOnSuccessOnly : true;
 
@@ -159,6 +168,26 @@ async function submit(args) {
   const fs = compiler.fs();
   const name = 'session';
 
+  // A new .lib submission with a given filename replaces any previous
+  // .lib session that has the same filename. `import("foo.lib")` is
+  // resolved by name, so keeping multiple sha-versioned entries would
+  // create ambiguity about which one the compiler picks. .dsp keeps
+  // its sha-versioned history — multiple submissions of the same .dsp
+  // file accumulate as distinct entries.
+  if (isLibFilename(filename)) {
+    for (const s of listSessions()) {
+      if (s.sha1 !== sha1 && s.filename === filename && isLibFilename(s.filename)) {
+        await deleteSession(s.sha1);
+      }
+    }
+  }
+
+  // Make every current `.lib` session visible to the compiler via the
+  // virtual FS at /usr/share/faust/<filename> before we ask it to
+  // compile. Removes stale injected libs whose sessions have been
+  // deleted off-band.
+  injectLibsIntoFs(fs, listSessions());
+
   // Clean any previous artefacts from a failed run.
   for (const p of ['/' + name + '-sig.dot', '/' + name + '.dot']) tryUnlink(fs, p);
   try {
@@ -170,6 +199,30 @@ async function submit(args) {
   let svg = null;
   let signalsDot = null;
   let tasksDot = null;
+
+  // `.lib` files are not standalone Faust programs (no `process =`).
+  // Skip the SVG / signals / tasks generation for them — the storage
+  // still happens so the file is available to other compiles.
+  if (isLibFilename(filename)) {
+    await storeSession({
+      sha1,
+      filename,
+      code,
+      errors: '',
+      svg: null,
+      signalsDot: null,
+      tasksDot: null,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+    });
+    shimSetActiveSha(sha1);
+    return {
+      sha1,
+      errors: '',
+      persisted: true,
+      persistOnSuccessOnly,
+    };
+  }
 
   // SVG diagrams — also our compile sanity check.
   // libfaust-wasm sometimes throws on broken code (e.g. unknown

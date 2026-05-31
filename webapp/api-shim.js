@@ -39,6 +39,7 @@ import {
   storeSession,
 } from './sessions.js';
 import { getFaust } from './faust.js';
+import { injectLibsIntoFs, isLibFilename } from './lib-inject.js';
 
 // ---------------------------------------------------------------------
 // Shared in-memory state (mirrors the Docker /api/state model).
@@ -108,12 +109,17 @@ function tryReadFile(fs, path) { try { return fs.readFile(path, { encoding: 'utf
 function tryReadDir(fs, path)  { try { return fs.readdir(path).filter((f) => f !== '.' && f !== '..'); } catch { return null; } }
 function tryUnlink(fs, path)   { try { fs.unlink(path); } catch {} }
 
-function safeDspName(name) {
+function safeSessionName(name) {
   if (typeof name !== 'string' || !name.trim()) return 'patch.dsp';
-  return name.trim().endsWith('.dsp') ? name.trim() : `${name.trim()}.dsp`;
+  const trimmed = name.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.endsWith('.dsp') || lower.endsWith('.lib')) return trimmed;
+  if (!lower.includes('.')) return `${trimmed}.dsp`;
+  throw new Error(`Unsupported file extension : ${trimmed} (only .dsp and .lib are accepted)`);
 }
 
 async function compileAndStore(code, filename) {
+  const fname = safeSessionName(filename);
   const sha1 = await sha1Hex(code);
   const existing = getSession(sha1);
   if (existing) {
@@ -125,6 +131,34 @@ async function compileAndStore(code, filename) {
   const compiler = faust.compiler;
   const fs = compiler.fs();
   const name = 'session';
+
+  // .lib : enforce single-instance-per-filename + persist as-is
+  // (libraries don't have a `process =`, so the SVG / signals / tasks
+  // sanity check would fail on them and we'd lose a valid file).
+  if (isLibFilename(fname)) {
+    for (const s of listSessions()) {
+      if (s.sha1 !== sha1 && s.filename === fname && isLibFilename(s.filename)) {
+        await deleteSession(s.sha1);
+      }
+    }
+    await storeSession({
+      sha1,
+      filename: fname,
+      code,
+      errors: '',
+      svg: null,
+      signalsDot: null,
+      tasksDot: null,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+    });
+    shimSetActiveSha(sha1);
+    return { sha1, errors: '' };
+  }
+
+  // Inject any current .lib sessions into the compiler FS so a .dsp
+  // that does `import("foo.lib")` finds them at /usr/share/faust/foo.lib.
+  injectLibsIntoFs(fs, listSessions());
 
   for (const p of [`/${name}-sig.dot`, `/${name}.dot`]) tryUnlink(fs, p);
   try {
@@ -169,7 +203,7 @@ async function compileAndStore(code, filename) {
   if (errors === '') {
     await storeSession({
       sha1,
-      filename: safeDspName(filename),
+      filename: fname,
       code,
       errors,
       svg,
@@ -390,7 +424,7 @@ async function handleVersion() {
 }
 
 function handleAppVersion() {
-  return ok({ version: '0.6.2' });
+  return ok({ version: '0.7.0' });
 }
 
 function handleFaustHelp() {

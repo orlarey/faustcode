@@ -42,6 +42,8 @@ import {
   drawSpectrumGrid
 } from './shared/run-scope-utils.js';
 import { aggregateMaxHold } from '../spectrum.js';
+import { injectLibsIntoFs } from '../lib-inject.js';
+import { listSessions } from '../sessions.js';
 
 // Audio graph runtime (single active DSP instance for the Run view).
 let audioContext = null;
@@ -1044,6 +1046,9 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
     logRunPerf('compile:instantiateModule:done', instantiateStartedAt, `sha=${sha}`);
     throwIfStaleRender(isStale);
     const compiler = new FaustCompiler(new LibFaust(module));
+    // Make every `.lib` session visible to the run-view compiler so a
+    // .dsp that imports a user lib finds it under /usr/share/faust/.
+    try { injectLibsIntoFs(compiler.fs(), listSessions()); } catch {}
     const generator = voices > 0 ? new FaustPolyDspGenerator() : new FaustMonoDspGenerator();
     const generatorCompileStartedAt = performance.now();
     const compiled = await generator.compile(compiler, 'dsp', code, '-ftz 2');

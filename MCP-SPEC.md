@@ -5,11 +5,11 @@ webapp faustcode, quel outil MCP permet à une IA de produire le même
 effet ?
 
 Snapshot pris le **2026-05-30** (révisé le **2026-05-31** : ajout puis
-retrait de `inlineAudio`, puis `detail: "metrics"` livré en 0.5.0 sous la
-forme `audio_metrics_v1`, et restructuré en `audio_metrics_v2` en 0.6.0
-pour capturer l'évolution temporelle — segmentation attack/sustain/release
-auto-détectée via la courbe RMS, métriques différenciées par phase),
-contrat `tools.json` version **0.6.0** (37 outils). À refaire si on
+retrait de `inlineAudio`, `audio_metrics_v1` en 0.5.0 puis `_v2` en
+0.6.0 pour capturer l'évolution temporelle, et **0.7.0** : `submit`
+accepte des fichiers `.lib` qui sont injectés dans le FS du compilateur
+avant chaque compile pour résoudre `import("foo.lib")` dans les `.dsp`),
+contrat `tools.json` version **0.7.0** (37 outils). À refaire si on
 ajoute des outils ou si la webapp gagne / perd des surfaces.
 
 Légende : **✓** couvert, **◐** partiellement couvert (effet équivalent
