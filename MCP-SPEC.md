@@ -5,11 +5,11 @@ webapp faustcode, quel outil MCP permet à une IA de produire le même
 effet ?
 
 Snapshot pris le **2026-05-30** (révisé le **2026-05-31** : ajout puis
-retrait de `inlineAudio`, puis ajout d'un niveau `detail: "metrics"` à
-`render_audio` pour fournir une analyse riche `audio_metrics_v1` —
-algorithmes alignés bit-pour-bit avec `horn_metrics.py` côté librosa
-pour qu'un client puisse comparer deux JSONs sans dérive d'algo),
-contrat `tools.json` version **0.5.0** (37 outils). À refaire si on
+retrait de `inlineAudio`, puis `detail: "metrics"` livré en 0.5.0 sous la
+forme `audio_metrics_v1`, et restructuré en `audio_metrics_v2` en 0.6.0
+pour capturer l'évolution temporelle — segmentation attack/sustain/release
+auto-détectée via la courbe RMS, métriques différenciées par phase),
+contrat `tools.json` version **0.6.0** (37 outils). À refaire si on
 ajoute des outils ou si la webapp gagne / perd des surfaces.
 
 Légende : **✓** couvert, **◐** partiellement couvert (effet équivalent
@@ -177,19 +177,33 @@ cosmétique / non pertinent côté IA.
   `script` pour la symétrie avec les events suivants. **Pour qu'une transition de bouton soit
   détectable par un DSP à déclenchement (front montant)**, schedulez la transition à
   `atMs > 0` (e.g. `atMs: 10`) avec le bouton initial à `0` dans `paramSetup`.
-- **`render_audio: detail = "metrics"`** (0.5.0) : pour un feedback plus riche que
-  `light` sans le coût d'un fichier WAV. Renvoie un `audio_metrics_v1` calculé sur le
-  plateau auto-détecté du rendu : `f0Hz` avec **correction sous-harmonique** (important
-  pour les DSP où H2 ou H3 dominent H1, typique des sons cuivrés), `harmonicsDb[N]`,
-  `hnrDb` (harmonic-to-noise ratio = marqueur du souffle), `roughnessDb` par bandes
-  de modulation 5-20/20-50/50-100/100-200 Hz (capte grain/battements), et
-  `features` STFT-moyennées (`centroidHz`, `rolloff95Hz`, `flatness`) avec les mêmes
-  défauts que `librosa.feature.spectral_*` (n_fft=2048, hop=512, hann, center=True,
-  pad zero). Cross-validé sur un signal stationnaire (220+440+660 Hz) — les chiffres
-  matchent `horn_metrics.py` au bit près pour f0, harmonics, HNR, centroid, rolloff,
-  flatness. Roughness diffère de ~1 dB côté résiduel (RMS framing légèrement différent
-  côté librosa). `metricsOptions` expose les knobs (fmin, fmax, nHarm, plateau,
-  roughnessBands) pour les sons hors de la fenêtre klaxon par défaut.
+- **`render_audio: detail = "metrics"`** : retourne un `audio_metrics_v2` (0.6.0,
+  remplace `audio_metrics_v1` de 0.5.0 — pas de rétro-compat, le v1 n'a vécu que 2 h).
+  Le rendu est segmenté en **phases d'enveloppe** détectées par la courbe RMS :
+  attack (10 % → 90 % du pic RMS), sustain (frames toujours au-dessus de 50 % du pic ;
+  englobe le decay vers un sustainLevel ADSR), release (sustain → 10 % du pic).
+  Sortie en 4 blocs :
+  - **`envelope`** : `attackMs`, `peakDbFS`, `sustainStartMs`, `sustainEndMs`,
+    `releaseMs`, `decaySlopeDbPerS` (régression linéaire en dB sur la release).
+  - **`attack`** (FFT 512, ~21 ms @ 24 kHz) : `centroidHz`, `rolloff95Hz`, `flatness`,
+    `spectralFluxDb` (distance L2 magnitude entre frames successives — élevé pour les
+    attaques claquées, faible pour les attaques feutrées). Pas de f0/harmonics : trop
+    court pour être fiable.
+  - **`sustain`** (pipeline complet, n_fft=2048 STFT center=True comme librosa) :
+    `f0Hz` avec correction sous-harmonique (DSP où H2 ou H3 dominent H1, brass/horn),
+    `harmonicsDb[N]`, `hnrDb`, `roughnessDb` par bandes (5-20/20-50/50-100/100-200 Hz),
+    `features` (`centroidHz`, `rolloff95Hz`, `flatness`) — bit-comparables avec
+    `librosa.feature.spectral_*`. Cross-validé sur un signal 220+440+660 Hz :
+    f0/harmonics/HNR/centroid/rolloff/flatness identiques à `horn_metrics.py`.
+  - **`release`** : même shape que `attack`.
+
+  **Signaux stationnaires** (pas de gate) : `attackMs`≈0, `releaseMs`≈0, sustain
+  englobe tout le rendu. Les blocs attack/release sont émis avec `durationMs: 0`,
+  pas d'erreur.
+
+  **`metricsOptions`** expose les knobs : `fmin` / `fmax` (défaut 50-2000 Hz pour
+  couvrir la majorité des sons musicaux ; passer `fmax: 400` pour mimer le défaut
+  klaxon de `horn_metrics.py`), `nHarm`, `plateauCapS`, `roughnessBands`.
 - **`render_audio` et l'accessibilité du `path`** : le fichier WAV est écrit sur le
   filesystem de l'**hôte du binaire** (`$TMPDIR/faustcode-renders/`). Pour **Claude Code**
   (modèle et binaire sur le même hôte), `librosa.load(path)` marche directement. Pour

@@ -382,8 +382,13 @@ const DEFAULT_ROUGHNESS_BANDS = [
 ];
 
 const DEFAULT_OPTS = Object.freeze({
+  // f0 search range : E1 (41 Hz) to B6 (1976 Hz) covers most pitched
+  // musical content. Klaxon-style work (low brass) is happy with the
+  // top capped at 400 Hz ; widen here on purpose so that a user who
+  // does not override gets a sensible f0 on a typical instrument
+  // sample. Pass metricsOptions.fmax: 400 to mirror horn_metrics.py.
   fmin: 50,
-  fmax: 400,
+  fmax: 2000,
   nHarm: 16,
   plateauFrac: 0.6,
   plateauMinLenS: 0.5,
@@ -392,22 +397,262 @@ const DEFAULT_OPTS = Object.freeze({
 });
 
 /**
- * Build an `audio_metrics_v1` payload from an AudioBuffer. Mono mix is
- * applied when the buffer has more than one channel ; analysis is
- * always on a single channel. The plateau is auto-detected and capped
- * to opts.plateauCapS to keep multi-event sources (e.g. a 3-honk
- * sample) from averaging across distinct events.
+ * Segment the signal into attack / sustain / release based on the RMS
+ * envelope. Used by audio_metrics_v2 to surface envelope dynamics and
+ * to scope the sustain analysis to the actual sustained portion.
+ *
+ *   attackStart : first RMS frame above 10% of peak
+ *   attackEnd   : first RMS frame above 90% of peak (≈ end of rise)
+ *   sustainEnd  : last RMS frame still above 90% of peak from the right
+ *   releaseEnd  : first RMS frame below 10% of peak after sustainEnd
+ *
+ * Envelope metadata reported in ms ; decay slope fitted on the dB-RMS
+ * curve over the release window via linear regression.
+ *
+ * For a fully-stationary signal (no gate) attackMs and releaseMs collapse
+ * to ~0 and sustain spans the whole buffer — the caller still gets a
+ * sensible v2 payload, just with the transient blocks empty.
+ *
+ * @param {Float32Array} buffer  mono PCM
+ * @param {number} sr
+ * @returns {{
+ *   samples: { attackStart, attackEnd, sustainEnd, releaseEnd },
+ *   envelope: { attackMs, peakDbFS, sustainStartMs, sustainEndMs, releaseMs, decaySlopeDbPerS }
+ * }}
+ */
+function detectEnvelopePhases(buffer, sr) {
+  const hop = 128;
+  const win = 256;
+  if (buffer.length < win) {
+    return {
+      samples: { attackStart: 0, attackEnd: 0, sustainEnd: buffer.length, releaseEnd: buffer.length },
+      envelope: { attackMs: 0, peakDbFS: -200, sustainStartMs: 0, sustainEndMs: 0, releaseMs: 0, decaySlopeDbPerS: 0 },
+    };
+  }
+  const nFrames = Math.floor((buffer.length - win) / hop) + 1;
+  const rms = new Float32Array(nFrames);
+  let peakRms = 0;
+  let peakIdx = 0;
+  for (let f = 0; f < nFrames; f++) {
+    const i0 = f * hop;
+    let s = 0;
+    for (let i = 0; i < win; i++) {
+      const v = buffer[i0 + i];
+      s += v * v;
+    }
+    rms[f] = Math.sqrt(s / win);
+    if (rms[f] > peakRms) { peakRms = rms[f]; peakIdx = f; }
+  }
+  // Sample-level peak for peakDbFS.
+  let peakAbs = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    const a = buffer[i] < 0 ? -buffer[i] : buffer[i];
+    if (a > peakAbs) peakAbs = a;
+  }
+  const peakDbFS = peakAbs > 0 ? 20 * Math.log10(peakAbs) : -200;
+
+  if (peakRms <= 0) {
+    return {
+      samples: { attackStart: 0, attackEnd: 0, sustainEnd: buffer.length, releaseEnd: buffer.length },
+      envelope: { attackMs: 0, peakDbFS, sustainStartMs: 0, sustainEndMs: 0, releaseMs: 0, decaySlopeDbPerS: 0 },
+    };
+  }
+  const thr10 = 0.1 * peakRms;
+  const thr50 = 0.5 * peakRms;
+  const thr90 = 0.9 * peakRms;
+
+  // attack : 10% → 90% rise on the way to peak (captures the transient
+  // ramp, decay-to-sustain belongs to the sustain block by convention).
+  let attackStartF = 0;
+  for (let i = 0; i <= peakIdx; i++) if (rms[i] > thr10) { attackStartF = i; break; }
+  let attackEndF = peakIdx;
+  for (let i = attackStartF; i <= peakIdx; i++) if (rms[i] > thr90) { attackEndF = i; break; }
+
+  // sustain : last frame still above 50% peak — engulfs an ADSR decay
+  // settling on a sustain level (typically 50-80% of peak). A higher
+  // threshold (90% peak) would cut sustain prematurely on any ADSR-
+  // shaped envelope. 50% is a pragmatic compromise that handles both
+  // hold-to-peak and ADSR cases ; sustains with sustainLevel < 50%
+  // peak are atypical.
+  let sustainEndF = attackEndF;
+  for (let i = attackEndF; i < nFrames; i++) {
+    if (rms[i] > thr50) sustainEndF = i;
+  }
+
+  // release : first frame < 10% peak after sustainEnd
+  let releaseEndF = nFrames - 1;
+  for (let i = sustainEndF + 1; i < nFrames; i++) {
+    if (rms[i] < thr10) { releaseEndF = i; break; }
+    releaseEndF = i;
+  }
+
+  const samplesPerFrame = hop;
+  const samples = {
+    attackStart: attackStartF * samplesPerFrame,
+    attackEnd: attackEndF * samplesPerFrame,
+    sustainEnd: Math.min(buffer.length, sustainEndF * samplesPerFrame + win),
+    releaseEnd: Math.min(buffer.length, releaseEndF * samplesPerFrame + win),
+  };
+
+  // Decay slope : linear regression of dB(rms) vs t on the release window
+  let decaySlopeDbPerS = 0;
+  if (releaseEndF > sustainEndF + 2) {
+    let n = 0;
+    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+    for (let i = sustainEndF; i <= releaseEndF; i++) {
+      const r = rms[i];
+      if (r > 1e-10) {
+        const t = ((i - sustainEndF) * hop) / sr;
+        const y = 20 * Math.log10(r);
+        sumX += t; sumY += y;
+        sumXY += t * y; sumX2 += t * t;
+        n++;
+      }
+    }
+    if (n >= 2) {
+      const denom = n * sumX2 - sumX * sumX;
+      if (Math.abs(denom) > 1e-12) decaySlopeDbPerS = (n * sumXY - sumX * sumY) / denom;
+    }
+  }
+
+  const attackMs = ((attackEndF - attackStartF) * hop / sr) * 1000;
+  const releaseMs = ((releaseEndF - sustainEndF) * hop / sr) * 1000;
+  const sustainStartMs = (attackEndF * hop / sr) * 1000;
+  const sustainEndMs = (sustainEndF * hop / sr) * 1000;
+
+  return {
+    samples,
+    envelope: {
+      attackMs: Math.round(attackMs * 10) / 10,
+      peakDbFS: Math.round(peakDbFS * 100) / 100,
+      sustainStartMs: Math.round(sustainStartMs),
+      sustainEndMs: Math.round(sustainEndMs),
+      releaseMs: Math.round(releaseMs * 10) / 10,
+      decaySlopeDbPerS: Math.round(decaySlopeDbPerS * 10) / 10,
+    },
+  };
+}
+
+/**
+ * Short-window spectral features for transient phases (attack / release).
+ * Uses a smaller fftSize (512, ~21 ms @ 24 kHz) than the sustain pipeline
+ * so even a 50 ms attack provides a few overlapping frames. Returns the
+ * same {centroidHz, rolloff95Hz, flatness} flavour as the sustain
+ * features plus `spectralFluxDb` — the mean L2 distance between
+ * successive frame magnitudes, in dB. Spectral flux peaks during the
+ * attack of percussive / brassy sounds : a feltched note has low flux,
+ * a struck note has high flux.
+ *
+ * @param {Float32Array} seg
+ * @param {number} sr
+ * @returns {{centroidHz, rolloff95Hz, flatness, spectralFluxDb}}
+ */
+function transientSpectralFeatures(seg, sr) {
+  const fftSize = 512;
+  const hop = 128;
+  const half = fftSize >> 1;
+  if (seg.length < fftSize) {
+    return { centroidHz: 0, rolloff95Hz: 0, flatness: 0, spectralFluxDb: -200 };
+  }
+  const padded = new Float32Array(seg.length + fftSize);
+  padded.set(seg, half);
+  const nFrames = 1 + Math.floor((padded.length - fftSize) / hop);
+  const win = hanning(fftSize);
+  const re = new Float32Array(fftSize);
+  const im = new Float32Array(fftSize);
+  const binHz = sr / fftSize;
+  let centroidSum = 0;
+  let rolloffSum = 0;
+  let flatnessSum = 0;
+  let fluxSum = 0;
+  let fluxCount = 0;
+  const prevMag = new Float32Array(half + 1);
+  const curMag = new Float32Array(half + 1);
+  for (let f = 0; f < nFrames; f++) {
+    const i0 = f * hop;
+    for (let i = 0; i < fftSize; i++) {
+      re[i] = padded[i0 + i] * win[i];
+      im[i] = 0;
+    }
+    fftRadix2(re, im);
+    let magTotal = 0;
+    let magFreqTotal = 0;
+    let powerTotal = 0;
+    let logPowerSum = 0;
+    let frameFlux = 0;
+    for (let i = 0; i <= half; i++) {
+      const m = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
+      curMag[i] = m;
+      magTotal += m;
+      magFreqTotal += i * binHz * m;
+      const p = m * m;
+      powerTotal += p;
+      logPowerSum += Math.log(Math.max(p, 1e-30));
+      const d = m - prevMag[i];
+      frameFlux += d * d;
+    }
+    centroidSum += magTotal > 0 ? magFreqTotal / magTotal : 0;
+    const target = 0.95 * magTotal;
+    let acc = 0;
+    let rBin = half;
+    for (let i = 0; i <= half; i++) {
+      acc += curMag[i];
+      if (acc >= target) { rBin = i; break; }
+    }
+    rolloffSum += rBin * binHz;
+    const halfPlus1 = half + 1;
+    const geoMean = halfPlus1 > 0 ? Math.exp(logPowerSum / halfPlus1) : 0;
+    const arithMean = halfPlus1 > 0 ? powerTotal / halfPlus1 : 0;
+    flatnessSum += arithMean > 0 ? geoMean / arithMean : 0;
+    if (f > 0) {
+      fluxSum += Math.sqrt(frameFlux);
+      fluxCount++;
+    }
+    // copy curMag → prevMag for next frame
+    prevMag.set(curMag);
+  }
+  const flux = fluxCount > 0 ? fluxSum / fluxCount : 0;
+  return {
+    centroidHz: Math.round(centroidSum / nFrames),
+    rolloff95Hz: Math.round(rolloffSum / nFrames),
+    flatness: Math.round((flatnessSum / nFrames) * 10000) / 10000,
+    spectralFluxDb: Math.round((flux > 0 ? 20 * Math.log10(flux) : -200) * 10) / 10,
+  };
+}
+
+/**
+ * Build an `audio_metrics_v2` payload from an AudioBuffer.
+ *
+ * v2 adds the missing temporal dimension that v1 was blind to. The
+ * signal is segmented into attack / sustain / release phases by
+ * tracking the RMS envelope, and each phase carries its own metrics :
+ *
+ *   envelope : attackMs, peakDbFS, sustainStartMs, sustainEndMs,
+ *              releaseMs, decaySlopeDbPerS
+ *
+ *   attack   : short-window features (centroid, rolloff, flatness,
+ *              spectralFluxDb) — too short for reliable f0/harmonics
+ *
+ *   sustain  : full pipeline (f0 with sub-harmonic correction,
+ *              harmonicsDb[N], hnrDb, roughnessDb by band, librosa-
+ *              comparable features) — capped to opts.plateauCapS
+ *
+ *   release  : same shape as `attack`
+ *
+ * Stationary signals (no gate) get attackMs ≈ 0, releaseMs ≈ 0,
+ * sustain spanning the whole buffer — the attack / release blocks are
+ * still emitted but their values reflect the empty transient.
  *
  * @param {AudioBuffer} buffer
  * @param {object} [opts]
- * @returns {object} audio_metrics_v1
+ * @returns {object} audio_metrics_v2
  */
 export function buildAudioMetrics(buffer, opts = {}) {
   const o = { ...DEFAULT_OPTS, ...opts };
   const sr = buffer.sampleRate;
   const nCh = buffer.numberOfChannels;
   const nFrames = buffer.length;
-  // Mono mix : sum-of-channels / nCh. Float32, no need to clamp.
+  // Mono mix : sum-of-channels / nCh.
   const mono = new Float32Array(nFrames);
   for (let c = 0; c < nCh; c++) {
     const data = buffer.getChannelData(c);
@@ -417,30 +662,55 @@ export function buildAudioMetrics(buffer, opts = {}) {
     for (let i = 0; i < nFrames; i++) mono[i] /= nCh;
   }
 
-  let [s, e] = findPlateau(mono, sr, o.plateauFrac, o.plateauMinLenS);
-  e = Math.min(e, s + Math.floor(o.plateauCapS * sr));
-  const seg = mono.subarray(s, e);
-  if (seg.length < 256) {
-    // Avoid downstream divisions by zero / NaNs on extremely short renders.
-    throw new Error(`audio metrics : plateau too short (${seg.length} samples)`);
+  const env = detectEnvelopePhases(mono, sr);
+
+  // Sustain segment, capped per opts.plateauCapS to keep multi-event
+  // sources from averaging across distinct events.
+  let sustainStart = env.samples.attackEnd;
+  let sustainEnd = Math.max(env.samples.sustainEnd, sustainStart + 1);
+  const cap = sustainStart + Math.floor(o.plateauCapS * sr);
+  if (sustainEnd > cap) sustainEnd = cap;
+  const sustainSeg = mono.subarray(sustainStart, sustainEnd);
+
+  // Sustain block : full pipeline. We require a minimum length to
+  // avoid divisions-by-zero in the harmonic / HNR code.
+  let sustain;
+  if (sustainSeg.length >= 1024) {
+    const f0 = estimateF0(sustainSeg, sr, o.fmin, o.fmax);
+    sustain = {
+      durationMs: Math.round((sustainSeg.length / sr) * 1000),
+      f0Hz: Math.round(f0 * 10) / 10,
+      harmonicsDb: harmonicProfile(sustainSeg, f0, sr, o.nHarm),
+      hnrDb: hnrDb(sustainSeg, f0, sr),
+      roughnessDb: roughnessDb(sustainSeg, sr, o.roughnessBands),
+      features: spectralFeatures(sustainSeg, sr),
+    };
+  } else {
+    sustain = {
+      durationMs: Math.round((sustainSeg.length / sr) * 1000),
+      f0Hz: 0,
+      harmonicsDb: new Array(o.nHarm).fill(-200),
+      hnrDb: -200,
+      roughnessDb: Object.fromEntries(o.roughnessBands.map(([lo, hi]) => [`${lo}-${hi}Hz`, -200])),
+      features: { centroidHz: 0, rolloff95Hz: 0, flatness: 0 },
+      note: 'sustain too short for sustain-grade analysis',
+    };
   }
 
-  const f0 = estimateF0(seg, sr, o.fmin, o.fmax);
-  const harmonics = harmonicProfile(seg, f0, sr, o.nHarm);
-  const hnr = hnrDb(seg, f0, sr);
-  const roughness = roughnessDb(seg, sr, o.roughnessBands);
-  const features = spectralFeatures(seg, sr);
+  const attackSeg = mono.subarray(env.samples.attackStart, env.samples.attackEnd);
+  const releaseSeg = mono.subarray(env.samples.sustainEnd, env.samples.releaseEnd);
 
   return {
-    type: 'audio_metrics_v1',
-    plateau: [
-      Math.round((s / sr) * 100) / 100,
-      Math.round((e / sr) * 100) / 100,
-    ],
-    f0Hz: Math.round(f0 * 10) / 10,
-    harmonicsDb: harmonics,
-    hnrDb: hnr,
-    roughnessDb: roughness,
-    features,
+    type: 'audio_metrics_v2',
+    envelope: env.envelope,
+    attack: {
+      durationMs: env.envelope.attackMs,
+      ...transientSpectralFeatures(attackSeg, sr),
+    },
+    sustain,
+    release: {
+      durationMs: env.envelope.releaseMs,
+      ...transientSpectralFeatures(releaseSeg, sr),
+    },
   };
 }

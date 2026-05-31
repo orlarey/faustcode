@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.5.0",
+  "contractVersion": "0.6.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -98,47 +98,85 @@
       },
       "required": ["mode", "summary"]
     },
-    "AudioMetrics": {
+    "AudioMetricsV2": {
       "type": "object",
-      "description": "Rich analysis of the auto-detected plateau of a render. Built by webapp/audio-metrics.js, whose algorithms mirror horn_metrics.py one-for-one (same f0 sub-harmonic rule, same window widths around k·f0, same HNR and AM-roughness band definitions) — so a caller can run horn_metrics.py on a reference audio file and diff the deltas without algorithmic drift.",
+      "description": "Phased analysis of a render, segmenting attack / sustain / release via the RMS envelope. The sustain block carries the rich pipeline (f0 + harmonics + HNR + roughness + librosa-comparable features) ; attack and release carry short-window transient features (centroid, rolloff, flatness, spectralFluxDb) — too short for reliable f0/harmonics. Stationary signals (no gate) still yield a well-formed payload, with attackMs and releaseMs ≈ 0 and sustain spanning the whole buffer. Algorithms mirror horn_metrics.py one-for-one for the sustain block.",
       "properties": {
-        "type": { "const": "audio_metrics_v1" },
-        "plateau": {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
-          "items": { "type": "number" },
-          "description": "[startSec, endSec] — auto-detected sustained portion the analysis ran on."
-        },
-        "f0Hz": {
-          "type": "number",
-          "description": "Fundamental in Hz, with sub-harmonic correction (handles DSPs where H2 / H3 dominate the spectrum, e.g. horn / brass timbres)."
-        },
-        "harmonicsDb": {
-          "type": "array",
-          "items": { "type": "number" },
-          "description": "dB level of each k·f0 for k=1..nHarm, normalised so the strongest harmonic is 0 dB. nHarm default 16."
-        },
-        "hnrDb": {
-          "type": "number",
-          "description": "Harmonic-to-noise ratio. Energy summed in narrow windows around k·f0 (±8 Hz) over energy in inter-harmonic gaps (k·f0+30..50 Hz). High values mean clean tone ; lower values mean broadband noise / breath."
-        },
-        "roughnessDb": {
+        "type": { "const": "audio_metrics_v2" },
+        "envelope": {
           "type": "object",
-          "description": "Amplitude-modulation depth per modulation-frequency band, in dB relative to total envelope energy. Default bands : 5-20 / 20-50 / 50-100 / 100-200 Hz. Captures beats, grain, rumble.",
-          "additionalProperties": { "type": "number" }
-        },
-        "features": {
-          "type": "object",
+          "description": "RMS-envelope dynamics across the whole render.",
           "properties": {
+            "attackMs": { "type": "number", "description": "Time from 10% to 90% of peak RMS, in milliseconds." },
+            "peakDbFS": { "type": "number", "description": "Sample-level peak in dB FS (full scale = 0)." },
+            "sustainStartMs": { "type": "number" },
+            "sustainEndMs": { "type": "number" },
+            "releaseMs": { "type": "number", "description": "Time from end-of-sustain to 10% of peak RMS." },
+            "decaySlopeDbPerS": { "type": "number", "description": "Linear regression slope of dB(RMS) over the release window. Negative for normal decay ; near 0 for sustained or cut releases." }
+          },
+          "required": ["attackMs", "peakDbFS", "sustainStartMs", "sustainEndMs", "releaseMs", "decaySlopeDbPerS"]
+        },
+        "attack": {
+          "type": "object",
+          "description": "Short-window features (FFT 512) of the attack phase. spectralFluxDb is the mean L2 magnitude-change between consecutive frames in dB — high values flag struck / brassy onsets, low values flag felted / smooth ones.",
+          "properties": {
+            "durationMs": { "type": "number" },
             "centroidHz": { "type": "number" },
             "rolloff95Hz": { "type": "number" },
-            "flatness": { "type": "number" }
+            "flatness": { "type": "number" },
+            "spectralFluxDb": { "type": "number" }
           },
-          "required": ["centroidHz", "rolloff95Hz", "flatness"]
+          "required": ["durationMs", "centroidHz", "rolloff95Hz", "flatness", "spectralFluxDb"]
+        },
+        "sustain": {
+          "type": "object",
+          "description": "Full-pipeline analysis of the sustained portion. Identical algorithms to horn_metrics.py.",
+          "properties": {
+            "durationMs": { "type": "number" },
+            "f0Hz": {
+              "type": "number",
+              "description": "Fundamental with sub-harmonic correction (handles DSPs where H2 / H3 dominate H1, typical of brass / horn timbres)."
+            },
+            "harmonicsDb": {
+              "type": "array",
+              "items": { "type": "number" },
+              "description": "dB level of each k·f0 for k=1..nHarm, normalised so the strongest harmonic is 0 dB."
+            },
+            "hnrDb": {
+              "type": "number",
+              "description": "Harmonic-to-noise ratio. High = clean tone, lower = breath / broadband background."
+            },
+            "roughnessDb": {
+              "type": "object",
+              "description": "Amplitude-modulation depth per modulation-frequency band, dB rel. to total envelope energy. Default bands 5-20 / 20-50 / 50-100 / 100-200 Hz.",
+              "additionalProperties": { "type": "number" }
+            },
+            "features": {
+              "type": "object",
+              "properties": {
+                "centroidHz": { "type": "number" },
+                "rolloff95Hz": { "type": "number" },
+                "flatness": { "type": "number" }
+              },
+              "required": ["centroidHz", "rolloff95Hz", "flatness"]
+            }
+          },
+          "required": ["durationMs", "f0Hz", "harmonicsDb", "hnrDb", "roughnessDb", "features"]
+        },
+        "release": {
+          "type": "object",
+          "description": "Same shape as `attack` — short-window features over the release window.",
+          "properties": {
+            "durationMs": { "type": "number" },
+            "centroidHz": { "type": "number" },
+            "rolloff95Hz": { "type": "number" },
+            "flatness": { "type": "number" },
+            "spectralFluxDb": { "type": "number" }
+          },
+          "required": ["durationMs", "centroidHz", "rolloff95Hz", "flatness", "spectralFluxDb"]
         }
       },
-      "required": ["type", "plateau", "f0Hz", "harmonicsDb", "hnrDb", "roughnessDb", "features"]
+      "required": ["type", "envelope", "attack", "sustain", "release"]
     },
     "FaustSymbolSummary": {
       "type": "object",
@@ -957,7 +995,7 @@
           "detail": {
             "type": "string",
             "enum": ["light", "metrics", "wav"],
-            "description": "Output flavour. `light`: spectrum_summary_v1 (fast tap near 80% of the render, low cost — good for iteration). `metrics`: audio_metrics_v1 (richer analysis on the auto-detected plateau : f0 with sub-harmonic correction, harmonics dB profile, HNR, AM roughness per band, spectral features — same definitions as horn_metrics.py so a caller can run that script on a reference file and diff against this JSON). `wav`: Float32 IEEE_FLOAT WAV written to disk, path in structured content (see description for the Claude Desktop caveat)."
+            "description": "Output flavour. `light`: spectrum_summary_v1 (fast tap near 80% of the render, low cost — good for big-grain iteration). `metrics`: audio_metrics_v2 — phased analysis with envelope dynamics, attack/sustain/release blocks, sustain features algorithmically aligned with horn_metrics.py (librosa) for cross-tool comparison. `wav`: Float32 IEEE_FLOAT WAV written to disk, path in structured content (see description for the Claude Desktop caveat)."
           },
           "durationMs": { "type": "number", "exclusiveMinimum": 0, "maximum": 30000 },
           "sampleRate": { "type": "number", "minimum": 8000, "maximum": 192000 },
@@ -1035,7 +1073,7 @@
           {
             "properties": {
               "mime": { "const": "application/json" },
-              "content": { "$ref": "#/$defs/AudioMetrics" },
+              "content": { "$ref": "#/$defs/AudioMetricsV2" },
               "render": {
                 "type": "object",
                 "properties": {
