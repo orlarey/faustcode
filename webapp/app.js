@@ -917,7 +917,7 @@ function updateSessionNavigation() {
 
   if (isEmpty) {
     // Empty session.
-    sessionLabel.textContent = 'Empty | Drop .dsp';
+    sessionLabel.textContent = 'Empty | Click ➕ or drop .dsp';
     sessionLabel.classList.add('clickable');
     sessionPrev.disabled = currentDisplayPos >= totalDisplayItems - 1;
     sessionNext.disabled = currentDisplayPos <= 0;
@@ -1686,29 +1686,41 @@ const STARTER_DSP = `import("stdfaust.lib");
 process = 0;
 `;
 
+/**
+ * Submit the starter DSP under `untitled.dsp` and activate the resulting
+ * session in the DSP view. Idempotent on the starter content : clicking
+ * twice without intervening edits maps to the same sha and just
+ * reactivates the existing untitled session.
+ *
+ * Returns the sha1 of the activated session.
+ */
+async function submitNewBlankPatch() {
+  const response = await fetch('/api/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: STARTER_DSP, filename: 'untitled.dsp' }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result || typeof result.sha1 !== 'string') {
+    throw new Error((result && result.error) || 'New patch submit failed');
+  }
+  await loadSessions();
+  const idx = state.sessions.findIndex((s) => s.sha1 === result.sha1);
+  if (idx >= 0) {
+    await loadSessionByIndex(idx);
+    if (state.currentView !== 'dsp') {
+      await switchView('dsp');
+    }
+  }
+  return result.sha1;
+}
+
 if (newSessionBtn) {
   newSessionBtn.addEventListener('click', async () => {
     showLoading();
     hideError();
     try {
-      const response = await fetch('/api/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: STARTER_DSP, filename: 'untitled.dsp' }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result || typeof result.sha1 !== 'string') {
-        throw new Error(result.error || 'New patch submit failed');
-      }
-      await loadSessions();
-      const idx = state.sessions.findIndex((s) => s.sha1 === result.sha1);
-      if (idx >= 0) {
-        await loadSessionByIndex(idx);
-        // Drop the user straight into the DSP editor for the new patch.
-        if (state.currentView !== 'dsp') {
-          await switchView('dsp');
-        }
-      }
+      await submitNewBlankPatch();
     } catch (err) {
       showError(`New patch: ${err.message}`);
     } finally {
@@ -1786,11 +1798,41 @@ if (editSessionBtn) {
   });
 }
 
+/**
+ * Drop the user onto their previous session if one was persisted (and
+ * isn't the showcase preview that just ran), otherwise onto a fresh
+ * `untitled.dsp` blank patch. Consumes state.preBootActiveSha so a
+ * later click does not reuse the stale value.
+ */
+async function landOnEntrySession() {
+  const lastSha = state.preBootActiveSha;
+  state.preBootActiveSha = null;
+  const showcaseSha = state.showcase && state.showcase.sha;
+  if (lastSha && lastSha !== showcaseSha) {
+    const idx = state.sessions.findIndex((s) => s.sha1 === lastSha);
+    if (idx >= 0) {
+      await loadSessionByIndex(idx);
+      return;
+    }
+  }
+  // First boot, no persisted session, or the persisted one was deleted
+  // off-band : drop onto a fresh blank canvas.
+  try {
+    await submitNewBlankPatch();
+  } catch (err) {
+    // If the blank submit fails (very rare — implies the compiler is
+    // broken), at least leave the user in a sane empty state so they
+    // can drop a .dsp file.
+    showError(`Could not create blank patch : ${err.message}`);
+    await loadEmptySession({ resetView: true });
+  }
+}
+
 if (audioGateButton) {
   audioGateButton.addEventListener('click', async () => {
     stopShowcasePreview();
     if (state.audioUnlocked) {
-      await loadEmptySession({ resetView: true });
+      await landOnEntrySession();
       hideAudioGate();
       return;
     }
@@ -1801,7 +1843,7 @@ if (audioGateButton) {
       state.audioUnlocked = true;
       state.runGlobal.audioRunning = true;
       await syncState({ audioUnlocked: true });
-      await loadEmptySession({ resetView: true });
+      await landOnEntrySession();
       hideAudioGate();
       hideError();
     } catch (err) {
@@ -1929,6 +1971,22 @@ async function init() {
   updateSessionOrderIndicator();
   await loadViews();
   await loadSessions();
+
+  // Capture the persisted last-active session BEFORE the showcase
+  // preview overrides it. The ENTER click on the audio gate consumes
+  // this value to decide whether to restore the user's previous
+  // session or to drop them onto a fresh `untitled.dsp` blank canvas.
+  try {
+    const res = await fetch('/api/state');
+    if (res && res.ok) {
+      const remote = await res.json();
+      state.preBootActiveSha = (remote && typeof remote.sha1 === 'string') ? remote.sha1 : null;
+    } else {
+      state.preBootActiveSha = null;
+    }
+  } catch {
+    state.preBootActiveSha = null;
+  }
 
   state.sessionIndex = state.sessions.length;
   updateSessionNavigation();
