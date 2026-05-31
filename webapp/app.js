@@ -25,6 +25,7 @@ const sessionLabel = document.getElementById('session-label');
 const sessionOrderIndicator = document.getElementById('session-order-indicator');
 const sessionPrev = document.getElementById('session-prev');
 const sessionNext = document.getElementById('session-next');
+const newSessionBtn = document.getElementById('new-session');
 const viewSelect = document.getElementById('view-select');
 const dropOverlay = document.getElementById('drop-overlay');
 const loadingOverlay = document.getElementById('loading-overlay');
@@ -1670,6 +1671,46 @@ if (refreshSessionBtn) {
       await renderCurrentView();
     } catch (err) {
       showError(`Error: ${err.message}`);
+    } finally {
+      hideLoading();
+    }
+  });
+}
+
+// Starter DSP for a brand-new patch. `process = 0;` outputs silence
+// (single channel of zero) so opening it does not blast audio ; the
+// user lands in the editor and types away. Importing the standard
+// library up front saves them one line when they reach for it.
+const STARTER_DSP = `import("stdfaust.lib");
+
+process = 0;
+`;
+
+if (newSessionBtn) {
+  newSessionBtn.addEventListener('click', async () => {
+    showLoading();
+    hideError();
+    try {
+      const response = await fetch('/api/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: STARTER_DSP, filename: 'untitled.dsp' }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result || typeof result.sha1 !== 'string') {
+        throw new Error(result.error || 'New patch submit failed');
+      }
+      await loadSessions();
+      const idx = state.sessions.findIndex((s) => s.sha1 === result.sha1);
+      if (idx >= 0) {
+        await loadSessionByIndex(idx);
+        // Drop the user straight into the DSP editor for the new patch.
+        if (state.currentView !== 'dsp') {
+          await switchView('dsp');
+        }
+      }
+    } catch (err) {
+      showError(`New patch: ${err.message}`);
     } finally {
       hideLoading();
     }
