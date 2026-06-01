@@ -58,6 +58,25 @@ deviates from the target before editing the DSP, otherwise you will
 adjust the wrong thing — softening the attack of a patch whose
 sustain is too bright, for instance, will not bring you closer.
 
+### Reading the descriptors that catch "synthetic"
+
+The metrics include several descriptors specifically tuned to surface
+the failure modes that make a render *read* as synthetic even when
+the harmonic spectrum looks right:
+
+| Field | What it tells you | Red flag |
+| :--- | :--- | :--- |
+| `*.centroidHzStd`, `*.rolloff95HzStd`, `*.flatnessStd` | Frame-to-frame variation of the descriptor during the phase. Living acoustic sources have non-trivial variation; frozen synths do not. | `centroidHzStd ≈ 0` in sustain = frozen spectrum (a tell-tale "synthetic" signal). |
+| `sustain.harmonicsDbAbsolute[]` | Un-renormalised dB level of each harmonic. Reveals missing high partials that the normalised `harmonicsDb` hides. | High-order entries pinned to ≤ -130 dB = those partials simply don't exist in your patch. |
+| `sustain.interHarmonicFloorDb` | Average level of the noise sitting between harmonics. Acoustic sources sit roughly in [-80, -40] dB. | < -90 dB = pathologically clean; no real instrument is that sterile. Pair with `hnrDb`. |
+| `hnrDb` | Harmonic-to-noise ratio. | `> 90 dB` is itself a red flag for an acoustic target — no real instrument reaches that. |
+| `*.crestDb` | Peak-to-RMS ratio per phase. Distinguishes signals with identical magnitude spectra but very different perceived character. | Two patches with the same `harmonicsDb` and different `crestDb` will sound different ("buzzy" vs "hummy"). |
+| `*.sharpnessAcum` | Aures/von Bismarck brilliance integral (Bark-weighted energy above ~3.4 kHz, relative units). | Diverges from the target's sharpness even when broadband features agree — it weights what the ear weights. |
+
+These descriptors are designed to make "frozen", "sterile", "missing
+top end", and "buzzy" visible *as numbers* — without them, you would
+need to listen to the WAV, which you cannot.
+
 ---
 
 ## The flagship scenario: reproducing a sound provided by the user

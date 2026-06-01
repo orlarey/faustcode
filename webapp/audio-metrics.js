@@ -12,6 +12,47 @@
 
 const TWO_PI = 2 * Math.PI;
 
+// von Bismarck (1974) sharpness weighting g(z) — flat for low Bark
+// bands, exponentially boosted above z ≈ 16 (~3.4 kHz) where the
+// perception of brilliance kicks in. Used by the Aures-style
+// sharpnessAcum metric below.
+const BARK_WEIGHT = new Float32Array(25);
+for (let z = 0; z <= 24; z++) {
+  BARK_WEIGHT[z] = z <= 15 ? 1 : 0.066 * Math.exp(0.171 * z);
+}
+
+// Traunmüller (1990) closed-form Hz → Bark conversion. Clamped to
+// [0, 24] so the table lookup above is always safe.
+function freqToBark(f) {
+  return Math.max(0, Math.min(24, 26.81 * f / (1960 + f) - 0.53));
+}
+
+// Hann-window amplitude correction factor. For a Hann-windowed FFT
+// of a pure sine at amplitude A, the magnitude peak is A * N/4.
+// `magToDbFsApprox(mag, N)` returns the corresponding dBFS so two
+// renders of the same content under the same window length produce
+// directly comparable numbers.
+function magToDbFsApprox(mag, N) {
+  const ref = N / 4;
+  return 20 * Math.log10(mag / ref + 1e-12);
+}
+
+// Crest factor in dB on a time-domain segment. Captures phase-locked
+// peakiness — a saw and a sine with identical magnitude spectra have
+// different crests, and the perception "buzzy vs hummy" follows.
+function crestDb(seg) {
+  let peak = 0;
+  let sumSq = 0;
+  for (let i = 0; i < seg.length; i++) {
+    const v = Math.abs(seg[i]);
+    if (v > peak) peak = v;
+    sumSq += seg[i] * seg[i];
+  }
+  if (peak <= 0 || sumSq <= 0) return 0;
+  const rms = Math.sqrt(sumSq / seg.length);
+  return Math.round(20 * Math.log10(peak / rms) * 10) / 10;
+}
+
 /**
  * In-place iterative Cooley-Tukey radix-2 FFT. Length must be a power
  * of two ; re and im are mutated. ~50 LoC ; fast enough for the
@@ -224,6 +265,55 @@ function harmonicProfile(seg, f0, sr, nHarm = 16) {
 }
 
 /**
+ * Harmonic levels in dBFS-like units (relative to a Hann-windowed
+ * full-scale sine) — NOT renormalised to the loudest partial. This
+ * is the array that reveals "missing high harmonics" : a synth with
+ * only 8 partials and a target with 32 will agree on H1..H8 in the
+ * normalised `harmonicsDb` but diverge sharply in `harmonicsDbAbsolute`
+ * from H9 upward. Pair this with the normalised array to read both
+ * relative shape and absolute brightness.
+ */
+function harmonicProfileAbsolute(seg, f0, sr, nHarm = 16) {
+  const { mag, binHz, N } = windowedFft(seg, sr, 8);
+  // The Hann-corrected reference assumes window length = segment length
+  // (before zero-pad). seg.length, not N.
+  const refMag = seg.length / 4;
+  const out = new Array(nHarm);
+  for (let k = 1; k <= nHarm; k++) {
+    const a = ampAround(mag, binHz, k * f0, 15);
+    out[k - 1] = Math.round(20 * Math.log10(a / refMag + 1e-12) * 10) / 10;
+  }
+  return out;
+}
+
+/**
+ * Inter-harmonic noise floor in dBFS-like units. We measure the energy
+ * falling in narrow gaps BETWEEN harmonics (k·f0 + 30…50 Hz for
+ * k = 1..40) — same windows the HNR computation uses for its
+ * denominator — and express the average level on the same absolute
+ * dB scale as harmonicProfileAbsolute. An implausibly low value
+ * (< -90 dB) flags a synthetic-clean signal ; acoustic sources sit
+ * typically in [-80, -40] dB depending on breath / bow / air noise.
+ */
+function interHarmonicFloorDb(seg, f0, sr) {
+  const { mag, binHz } = windowedFft(seg, sr, 8);
+  const nyquist = sr / 2;
+  let z = 0;
+  let count = 0;
+  for (let k = 1; k <= 40; k++) {
+    const tg = k * f0;
+    if (tg > nyquist - 200) break;
+    z += sumSquaredInBand(mag, binHz, tg + 30, tg + 50);
+    count++;
+  }
+  if (count === 0) return -200;
+  const meanPower = z / count;
+  const meanMag = Math.sqrt(meanPower);
+  const refMag = seg.length / 4;
+  return Math.round(20 * Math.log10(meanMag / refMag + 1e-12) * 10) / 10;
+}
+
+/**
  * Harmonic-to-noise ratio in dB. Accumulates harmonic energy in narrow
  * windows around k·f0 (±8 Hz) and noise energy in inter-harmonic gaps
  * (k·f0 + 30…50 Hz) for k = 1..40 — stop once a harmonic would land
@@ -313,7 +403,12 @@ function spectralFeatures(seg, sr) {
   const hop = 512;
   const halfFft = fftSize >> 1;
   if (seg.length < fftSize) {
-    return { centroidHz: 0, rolloff95Hz: 0, flatness: 0 };
+    return {
+      centroidHz: 0, centroidHzStd: 0,
+      rolloff95Hz: 0, rolloff95HzStd: 0,
+      flatness: 0, flatnessStd: 0,
+      sharpnessAcum: 0,
+    };
   }
   // librosa default : center=True with pad_mode='constant' (zero-pad)
   // halfFft samples on each side so frame i is centred at sample i*hop
@@ -326,10 +421,16 @@ function spectralFeatures(seg, sr) {
   const im = new Float32Array(fftSize);
   const half = halfFft;
   const binHz = sr / fftSize;
-  let centroidSum = 0;
-  let rolloffSum = 0;
-  let flatnessSum = 0;
+  // Pre-compute Bark band assignment per FFT bin, reused per frame
+  // for the sharpness integral.
+  const bandIdx = new Int16Array(half + 1);
+  for (let i = 0; i <= half; i++) bandIdx[i] = Math.round(freqToBark(i * binHz));
+  let centroidSum = 0, centroidSqSum = 0;
+  let rolloffSum = 0, rolloffSqSum = 0;
+  let flatnessSum = 0, flatnessSqSum = 0;
+  let sharpnessSum = 0;
   const frameMag = new Float32Array(half + 1);
+  const bandPower = new Float32Array(25);
   for (let f = 0; f < nFrames; f++) {
     const i0 = f * hop;
     for (let i = 0; i < fftSize; i++) {
@@ -341,6 +442,7 @@ function spectralFeatures(seg, sr) {
     let magFreqTotal = 0;
     let powerTotal = 0;
     let logPowerSum = 0;
+    for (let z = 0; z <= 24; z++) bandPower[z] = 0;
     for (let i = 0; i <= half; i++) {
       const m = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
       frameMag[i] = m;
@@ -349,9 +451,12 @@ function spectralFeatures(seg, sr) {
       const p = m * m;
       powerTotal += p;
       logPowerSum += Math.log(Math.max(p, 1e-30));   // librosa amin guard, matches default 1e-10**2 ≈ 1e-20
+      bandPower[bandIdx[i]] += p;
     }
     // centroid : magnitude-weighted mean frequency (librosa default)
-    centroidSum += magTotal > 0 ? magFreqTotal / magTotal : 0;
+    const centroid = magTotal > 0 ? magFreqTotal / magTotal : 0;
+    centroidSum += centroid;
+    centroidSqSum += centroid * centroid;
     // rolloff : cumulative magnitude, NOT power (librosa default)
     const target = 0.95 * magTotal;
     let acc = 0;
@@ -360,17 +465,42 @@ function spectralFeatures(seg, sr) {
       acc += frameMag[i];
       if (acc >= target) { rBin = i; break; }
     }
-    rolloffSum += rBin * binHz;
+    const rolloff = rBin * binHz;
+    rolloffSum += rolloff;
+    rolloffSqSum += rolloff * rolloff;
     // flatness : geom/arith of POWER (librosa default power=2.0)
     const halfPlus1 = half + 1;
     const geoMean = halfPlus1 > 0 ? Math.exp(logPowerSum / halfPlus1) : 0;
     const arithMean = halfPlus1 > 0 ? powerTotal / halfPlus1 : 0;
-    flatnessSum += arithMean > 0 ? geoMean / arithMean : 0;
+    const flatness = arithMean > 0 ? geoMean / arithMean : 0;
+    flatnessSum += flatness;
+    flatnessSqSum += flatness * flatness;
+    // sharpness (von Bismarck) : Zwicker-style compressive specific
+    // loudness N'(z) = E(z)^0.23 (approximation), weighted by g(z)·z.
+    // Without absolute SPL the value is RELATIVE — consistent across
+    // renders of the same gain, useful for comparing brilliance.
+    let snumer = 0, sdenom = 0;
+    for (let z = 0; z <= 24; z++) {
+      const nPrime = Math.pow(bandPower[z] + 1e-30, 0.23);
+      snumer += nPrime * BARK_WEIGHT[z] * z;
+      sdenom += nPrime;
+    }
+    if (sdenom > 0) sharpnessSum += 0.11 * snumer / sdenom;
   }
+  const centroidMean = centroidSum / nFrames;
+  const rolloffMean = rolloffSum / nFrames;
+  const flatnessMean = flatnessSum / nFrames;
+  const centroidStd = Math.sqrt(Math.max(0, centroidSqSum / nFrames - centroidMean * centroidMean));
+  const rolloffStd = Math.sqrt(Math.max(0, rolloffSqSum / nFrames - rolloffMean * rolloffMean));
+  const flatnessStd = Math.sqrt(Math.max(0, flatnessSqSum / nFrames - flatnessMean * flatnessMean));
   return {
-    centroidHz: Math.round(centroidSum / nFrames),
-    rolloff95Hz: Math.round(rolloffSum / nFrames),
-    flatness: Math.round((flatnessSum / nFrames) * 10000) / 10000,
+    centroidHz: Math.round(centroidMean),
+    centroidHzStd: Math.round(centroidStd),
+    rolloff95Hz: Math.round(rolloffMean),
+    rolloff95HzStd: Math.round(rolloffStd),
+    flatness: Math.round(flatnessMean * 10000) / 10000,
+    flatnessStd: Math.round(flatnessStd * 10000) / 10000,
+    sharpnessAcum: Math.round((sharpnessSum / nFrames) * 100) / 100,
   };
 }
 
@@ -552,7 +682,13 @@ function transientSpectralFeatures(seg, sr) {
   const hop = 128;
   const half = fftSize >> 1;
   if (seg.length < fftSize) {
-    return { centroidHz: 0, rolloff95Hz: 0, flatness: 0, spectralFluxDb: -200 };
+    return {
+      centroidHz: 0, centroidHzStd: 0,
+      rolloff95Hz: 0, rolloff95HzStd: 0,
+      flatness: 0, flatnessStd: 0,
+      sharpnessAcum: 0,
+      spectralFluxDb: -200,
+    };
   }
   const padded = new Float32Array(seg.length + fftSize);
   padded.set(seg, half);
@@ -561,13 +697,17 @@ function transientSpectralFeatures(seg, sr) {
   const re = new Float32Array(fftSize);
   const im = new Float32Array(fftSize);
   const binHz = sr / fftSize;
-  let centroidSum = 0;
-  let rolloffSum = 0;
-  let flatnessSum = 0;
+  const bandIdx = new Int16Array(half + 1);
+  for (let i = 0; i <= half; i++) bandIdx[i] = Math.round(freqToBark(i * binHz));
+  let centroidSum = 0, centroidSqSum = 0;
+  let rolloffSum = 0, rolloffSqSum = 0;
+  let flatnessSum = 0, flatnessSqSum = 0;
+  let sharpnessSum = 0;
   let fluxSum = 0;
   let fluxCount = 0;
   const prevMag = new Float32Array(half + 1);
   const curMag = new Float32Array(half + 1);
+  const bandPower = new Float32Array(25);
   for (let f = 0; f < nFrames; f++) {
     const i0 = f * hop;
     for (let i = 0; i < fftSize; i++) {
@@ -580,6 +720,7 @@ function transientSpectralFeatures(seg, sr) {
     let powerTotal = 0;
     let logPowerSum = 0;
     let frameFlux = 0;
+    for (let z = 0; z <= 24; z++) bandPower[z] = 0;
     for (let i = 0; i <= half; i++) {
       const m = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
       curMag[i] = m;
@@ -588,10 +729,13 @@ function transientSpectralFeatures(seg, sr) {
       const p = m * m;
       powerTotal += p;
       logPowerSum += Math.log(Math.max(p, 1e-30));
+      bandPower[bandIdx[i]] += p;
       const d = m - prevMag[i];
       frameFlux += d * d;
     }
-    centroidSum += magTotal > 0 ? magFreqTotal / magTotal : 0;
+    const centroid = magTotal > 0 ? magFreqTotal / magTotal : 0;
+    centroidSum += centroid;
+    centroidSqSum += centroid * centroid;
     const target = 0.95 * magTotal;
     let acc = 0;
     let rBin = half;
@@ -599,11 +743,22 @@ function transientSpectralFeatures(seg, sr) {
       acc += curMag[i];
       if (acc >= target) { rBin = i; break; }
     }
-    rolloffSum += rBin * binHz;
+    const rolloff = rBin * binHz;
+    rolloffSum += rolloff;
+    rolloffSqSum += rolloff * rolloff;
     const halfPlus1 = half + 1;
     const geoMean = halfPlus1 > 0 ? Math.exp(logPowerSum / halfPlus1) : 0;
     const arithMean = halfPlus1 > 0 ? powerTotal / halfPlus1 : 0;
-    flatnessSum += arithMean > 0 ? geoMean / arithMean : 0;
+    const flatness = arithMean > 0 ? geoMean / arithMean : 0;
+    flatnessSum += flatness;
+    flatnessSqSum += flatness * flatness;
+    let snumer = 0, sdenom = 0;
+    for (let z = 0; z <= 24; z++) {
+      const nPrime = Math.pow(bandPower[z] + 1e-30, 0.23);
+      snumer += nPrime * BARK_WEIGHT[z] * z;
+      sdenom += nPrime;
+    }
+    if (sdenom > 0) sharpnessSum += 0.11 * snumer / sdenom;
     if (f > 0) {
       fluxSum += Math.sqrt(frameFlux);
       fluxCount++;
@@ -611,11 +766,21 @@ function transientSpectralFeatures(seg, sr) {
     // copy curMag → prevMag for next frame
     prevMag.set(curMag);
   }
+  const centroidMean = centroidSum / nFrames;
+  const rolloffMean = rolloffSum / nFrames;
+  const flatnessMean = flatnessSum / nFrames;
+  const centroidStd = Math.sqrt(Math.max(0, centroidSqSum / nFrames - centroidMean * centroidMean));
+  const rolloffStd = Math.sqrt(Math.max(0, rolloffSqSum / nFrames - rolloffMean * rolloffMean));
+  const flatnessStd = Math.sqrt(Math.max(0, flatnessSqSum / nFrames - flatnessMean * flatnessMean));
   const flux = fluxCount > 0 ? fluxSum / fluxCount : 0;
   return {
-    centroidHz: Math.round(centroidSum / nFrames),
-    rolloff95Hz: Math.round(rolloffSum / nFrames),
-    flatness: Math.round((flatnessSum / nFrames) * 10000) / 10000,
+    centroidHz: Math.round(centroidMean),
+    centroidHzStd: Math.round(centroidStd),
+    rolloff95Hz: Math.round(rolloffMean),
+    rolloff95HzStd: Math.round(rolloffStd),
+    flatness: Math.round(flatnessMean * 10000) / 10000,
+    flatnessStd: Math.round(flatnessStd * 10000) / 10000,
+    sharpnessAcum: Math.round((sharpnessSum / nFrames) * 100) / 100,
     spectralFluxDb: Math.round((flux > 0 ? 20 * Math.log10(flux) : -200) * 10) / 10,
   };
 }
@@ -681,8 +846,11 @@ export function buildAudioMetrics(buffer, opts = {}) {
       durationMs: Math.round((sustainSeg.length / sr) * 1000),
       f0Hz: Math.round(f0 * 10) / 10,
       harmonicsDb: harmonicProfile(sustainSeg, f0, sr, o.nHarm),
+      harmonicsDbAbsolute: harmonicProfileAbsolute(sustainSeg, f0, sr, o.nHarm),
+      interHarmonicFloorDb: interHarmonicFloorDb(sustainSeg, f0, sr),
       hnrDb: hnrDb(sustainSeg, f0, sr),
       roughnessDb: roughnessDb(sustainSeg, sr, o.roughnessBands),
+      crestDb: crestDb(sustainSeg),
       features: spectralFeatures(sustainSeg, sr),
     };
   } else {
@@ -690,9 +858,17 @@ export function buildAudioMetrics(buffer, opts = {}) {
       durationMs: Math.round((sustainSeg.length / sr) * 1000),
       f0Hz: 0,
       harmonicsDb: new Array(o.nHarm).fill(-200),
+      harmonicsDbAbsolute: new Array(o.nHarm).fill(-200),
+      interHarmonicFloorDb: -200,
       hnrDb: -200,
       roughnessDb: Object.fromEntries(o.roughnessBands.map(([lo, hi]) => [`${lo}-${hi}Hz`, -200])),
-      features: { centroidHz: 0, rolloff95Hz: 0, flatness: 0 },
+      crestDb: 0,
+      features: {
+        centroidHz: 0, centroidHzStd: 0,
+        rolloff95Hz: 0, rolloff95HzStd: 0,
+        flatness: 0, flatnessStd: 0,
+        sharpnessAcum: 0,
+      },
       note: 'sustain too short for sustain-grade analysis',
     };
   }
@@ -705,11 +881,13 @@ export function buildAudioMetrics(buffer, opts = {}) {
     envelope: env.envelope,
     attack: {
       durationMs: env.envelope.attackMs,
+      crestDb: crestDb(attackSeg),
       ...transientSpectralFeatures(attackSeg, sr),
     },
     sustain,
     release: {
       durationMs: env.envelope.releaseMs,
+      crestDb: crestDb(releaseSeg),
       ...transientSpectralFeatures(releaseSeg, sr),
     },
   };

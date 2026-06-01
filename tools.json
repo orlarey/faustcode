@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.7.3",
+  "contractVersion": "0.8.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -118,19 +118,24 @@
         },
         "attack": {
           "type": "object",
-          "description": "Short-window features (FFT 512) of the attack phase. spectralFluxDb is the mean L2 magnitude-change between consecutive frames in dB — high values flag struck / brassy onsets, low values flag felted / smooth ones.",
+          "description": "Short-window features (FFT 512) of the attack phase. spectralFluxDb is the mean L2 magnitude-change between consecutive frames in dB — high values flag struck / brassy onsets, low values flag felted / smooth ones. *Std fields report frame-to-frame variation, surfacing the difference between a frozen synth and a living source.* crestDb captures waveform peakiness ; sharpnessAcum is the von Bismarck brilliance integral (Bark-band loudness above ~3.4 kHz, weighted ; relative units, calibrated for cross-render comparison).",
           "properties": {
             "durationMs": { "type": "number" },
             "centroidHz": { "type": "number" },
+            "centroidHzStd": { "type": "number", "description": "Frame-to-frame std of the spectral centroid over the attack — flags spectral motion vs frozen content." },
             "rolloff95Hz": { "type": "number" },
+            "rolloff95HzStd": { "type": "number" },
             "flatness": { "type": "number" },
+            "flatnessStd": { "type": "number" },
+            "sharpnessAcum": { "type": "number", "description": "Aures/von Bismarck sharpness — relative acum-like units. High = brassy/brilliant, low = mellow." },
+            "crestDb": { "type": "number", "description": "Peak-to-RMS ratio in dB. Distinguishes buzzy (high crest) from hummy (low crest) signals with the same spectrum." },
             "spectralFluxDb": { "type": "number" }
           },
-          "required": ["durationMs", "centroidHz", "rolloff95Hz", "flatness", "spectralFluxDb"]
+          "required": ["durationMs", "centroidHz", "rolloff95Hz", "flatness", "spectralFluxDb", "crestDb", "sharpnessAcum"]
         },
         "sustain": {
           "type": "object",
-          "description": "Full-pipeline analysis of the sustained portion. Identical algorithms to horn_metrics.py.",
+          "description": "Full-pipeline analysis of the sustained portion. harmonicsDb stays normalised (relative shape), harmonicsDbAbsolute exposes the un-renormalised levels (catches missing high harmonics). interHarmonicFloorDb pairs with hnrDb : very low values (< -90 dB) flag a pathologically clean synth ; acoustic sources usually sit between -80 and -40 dB. Std fields surface 'frozen vs living' spectra over the sustain window — typically the single most discriminating dimension for realism.",
           "properties": {
             "durationMs": { "type": "number" },
             "f0Hz": {
@@ -142,26 +147,41 @@
               "items": { "type": "number" },
               "description": "dB level of each k·f0 for k=1..nHarm, normalised so the strongest harmonic is 0 dB."
             },
+            "harmonicsDbAbsolute": {
+              "type": "array",
+              "items": { "type": "number" },
+              "description": "dB level of each k·f0 in dBFS-like units (Hann-corrected, relative to a full-scale sine). NOT renormalised — the absolute level of high harmonics reveals brightness deficits hidden by the normalised array."
+            },
+            "interHarmonicFloorDb": {
+              "type": "number",
+              "description": "Average dBFS-like level in the inter-harmonic gaps (k·f0 + 30..50 Hz). Very low (< -90 dB) = sterile synthetic ; acoustic sources sit ~ [-80, -40] dB. Pair with hnrDb to flag implausible cleanliness."
+            },
             "hnrDb": {
               "type": "number",
-              "description": "Harmonic-to-noise ratio. High = clean tone, lower = breath / broadband background."
+              "description": "Harmonic-to-noise ratio. High = clean tone, lower = breath / broadband background. Values above ~90 dB are themselves a realism red flag for acoustic targets."
             },
             "roughnessDb": {
               "type": "object",
               "description": "Amplitude-modulation depth per modulation-frequency band, dB rel. to total envelope energy. Default bands 5-20 / 20-50 / 50-100 / 100-200 Hz.",
               "additionalProperties": { "type": "number" }
             },
+            "crestDb": { "type": "number", "description": "Peak-to-RMS ratio in dB over the sustain window." },
             "features": {
               "type": "object",
+              "description": "librosa-comparable spectral features. *Std fields report frame-to-frame variation* — a synth with std ~ 0 vs an instrument with std ~ 200 Hz both produce the same mean centroid but read very differently. sharpnessAcum is the von Bismarck brilliance integral (relative units).",
               "properties": {
                 "centroidHz": { "type": "number" },
+                "centroidHzStd": { "type": "number" },
                 "rolloff95Hz": { "type": "number" },
-                "flatness": { "type": "number" }
+                "rolloff95HzStd": { "type": "number" },
+                "flatness": { "type": "number" },
+                "flatnessStd": { "type": "number" },
+                "sharpnessAcum": { "type": "number" }
               },
-              "required": ["centroidHz", "rolloff95Hz", "flatness"]
+              "required": ["centroidHz", "centroidHzStd", "rolloff95Hz", "rolloff95HzStd", "flatness", "flatnessStd", "sharpnessAcum"]
             }
           },
-          "required": ["durationMs", "f0Hz", "harmonicsDb", "hnrDb", "roughnessDb", "features"]
+          "required": ["durationMs", "f0Hz", "harmonicsDb", "harmonicsDbAbsolute", "interHarmonicFloorDb", "hnrDb", "roughnessDb", "crestDb", "features"]
         },
         "release": {
           "type": "object",
@@ -169,11 +189,16 @@
           "properties": {
             "durationMs": { "type": "number" },
             "centroidHz": { "type": "number" },
+            "centroidHzStd": { "type": "number" },
             "rolloff95Hz": { "type": "number" },
+            "rolloff95HzStd": { "type": "number" },
             "flatness": { "type": "number" },
+            "flatnessStd": { "type": "number" },
+            "sharpnessAcum": { "type": "number" },
+            "crestDb": { "type": "number" },
             "spectralFluxDb": { "type": "number" }
           },
-          "required": ["durationMs", "centroidHz", "rolloff95Hz", "flatness", "spectralFluxDb"]
+          "required": ["durationMs", "centroidHz", "rolloff95Hz", "flatness", "spectralFluxDb", "crestDb", "sharpnessAcum"]
         }
       },
       "required": ["type", "envelope", "attack", "sustain", "release"]
