@@ -207,45 +207,17 @@ export async function explainFaustSymbolForGoal({ symbol, goal }) {
   };
 }
 
-// Onboarding payload — identical to the Docker version (mcp.mjs).
-export const ONBOARDING_GUIDE = {
-  version: 1,
-  goals: [
-    'Design and iterate Faust DSP',
-    'Control run parameters safely',
-    'Measure spectral impact and audio quality',
-    'Control polyphony and MIDI notes when relevant',
-  ],
-  prerequisites: [
-    'If audio tools fail with "Audio is locked", ask the user to switch Audio to "On" once in Run view.',
-  ],
-  workflow: [
-    '1) set_view("run")',
-    '2) get_polyphony() then set_polyphony(...) if needed (0=mono)',
-    '3) get_run_ui() and get_run_params()',
-    '4) run_audio("on")',
-    '5) For continuous params: set_run_param_and_get_spectrum(...)',
-    '6) For transient buttons: trigger_button_and_get_spectrum(...)',
-    '7) For note events: prefer midi_note_*_and_get_spectrum(...)',
-    '8) Compare aggregate.summary and iterate one parameter at a time',
-  ],
-  toolHints: {
-    polyphony: 'Use set_polyphony(0) for mono, else 1/2/4/8/16/32/64.',
-    midi: 'Prefer midi_note_pulse(note, velocity, holdMs) for deterministic one-shot tests.',
-  },
-  qualityThresholds: {
-    clipRatioQ_warn: 1,
-    clipRatioQ_severe: 5,
-    clickScoreQ_warn: 20,
-    clickScoreQ_severe: 40,
-  },
-  policy: [
-    'Do not optimize timbre while ignoring audioQuality.',
-    'Flag severe clipping and click risk unless explicitly requested.',
-  ],
-  libraryDiscovery: [
-    'Use search_faust_lib(query) to find relevant functions without loading whole libraries.',
-    'Use get_faust_symbol(symbol) to retrieve usage, parameters, and test snippets.',
-    'Use list_faust_module(module) and get_faust_examples(symbolOrModule) for exploration.',
-  ],
-};
+// Onboarding payload — fetched lazily from ONBOARDING-GUIDE.md
+// (single source of truth at the repo root, symlinked into webapp/).
+let _onboardingPromise = null;
+export async function getOnboardingGuide() {
+  if (_onboardingPromise) return _onboardingPromise;
+  _onboardingPromise = (async () => {
+    const resp = await fetch('./ONBOARDING-GUIDE.md', { cache: 'no-cache' });
+    if (!resp.ok) {
+      throw new Error(`ONBOARDING-GUIDE.md not available (HTTP ${resp.status})`);
+    }
+    return resp.text();
+  })();
+  return _onboardingPromise;
+}

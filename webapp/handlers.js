@@ -27,7 +27,7 @@ import {
   listFaustModule,
   getFaustExamples,
   explainFaustSymbolForGoal,
-  ONBOARDING_GUIDE,
+  getOnboardingGuide,
 } from './faust-doc.js';
 import {
   mcpIsMounted,
@@ -479,7 +479,7 @@ async function get_view_content() {
 // ---------------------------------------------------------------------
 
 async function get_onboarding_guide() {
-  return ONBOARDING_GUIDE;
+  return { guide: await getOnboardingGuide() };
 }
 
 async function search_faust_lib(args) {

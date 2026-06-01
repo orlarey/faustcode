@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.7.1",
+  "contractVersion": "0.7.2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -223,21 +223,16 @@
   "tools": [
     {
       "name": "get_onboarding_guide",
-      "description": "Return best-practice workflow and thresholds so an AI client can operate faustcode autonomously.",
+      "description": "Return the faustcode onboarding guide — a markdown document explaining how an AI client should drive faustcode (the flagship 'reproduce a sound' workflow, the 'you are deaf' constraint, common anti-patterns). Sourced from ONBOARDING-GUIDE.md at the repo root.",
       "stability": "stable",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "outputSchema": {
         "type": "object",
         "properties": {
-          "goals": { "type": "array", "items": { "type": "string" } },
-          "prerequisites": { "type": "array", "items": { "type": "string" } },
-          "workflow": { "type": "array" },
-          "toolHints": { "type": "object" },
-          "qualityThresholds": { "type": "object" },
-          "policy": { "type": "array", "items": { "type": "string" } },
-          "libraryDiscovery": { "type": "array", "items": { "type": "string" } }
+          "guide": { "type": "string", "description": "Markdown text of the onboarding guide." }
         },
-        "additionalProperties": true
+        "required": ["guide"],
+        "additionalProperties": false
       }
     },
 
