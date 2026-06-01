@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.7.2",
+  "contractVersion": "0.7.3",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {

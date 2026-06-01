@@ -33,6 +33,33 @@ VU meter — not the way a listener hears a sound.
 
 ---
 
+## How a render's metrics are organised
+
+faustcode segments every rendered patch into three phases — auto-
+detected from the RMS envelope:
+
+| Phase     | Meaning                                                |
+| :-------- | :----------------------------------------------------- |
+| `attack`  | from onset to peak; the transient.                     |
+| `sustain` | the steady portion, where pitch and timbre stabilise.  |
+| `release` | from gate-off to silence; the tail.                    |
+
+Each phase carries its own descriptors: `durationMs` plus a vector
+of spectral features (`centroidHz`, `rolloff95Hz`, `flatness`,
+`spectralFluxDb`). The `sustain` phase additionally carries pitch
+and harmonic structure: `f0Hz`, `harmonicsDb[]`, `hnrDb`,
+`roughnessDb`. A global `envelope` block summarises the ADSR shape
+itself (`attackMs`, `sustainStartMs`, `sustainEndMs`, `releaseMs`,
+`peakDbFS`, `decaySlopeDbPerS`).
+
+The implication is methodological: a sound is not one vector, it is
+**three vectors plus an envelope**. Always identify which phase
+deviates from the target before editing the DSP, otherwise you will
+adjust the wrong thing — softening the attack of a patch whose
+sustain is too bright, for instance, will not bring you closer.
+
+---
+
 ## The flagship scenario: reproducing a sound provided by the user
 
 The user gives you a target audio recording (foghorn, bell, voice,
@@ -58,10 +85,12 @@ A few unwritten rules:
   canonical name `dsp`, so a `button("blast")` becomes `/dsp/blast` —
   but that convention may evolve; `get_run_ui` is the authoritative
   source.
-- **At step 6, change one dimension at a time.** If the centroid is
-  too high, adjust the lowpass before touching the envelope.
-  Iterating one dimension per cycle gives you a clean progress (or
-  regression) signal.
+- **At step 6, change one dimension at a time — and locate it in one
+  phase.** "Lower the lowpass" is ambiguous; "lower the lowpass during
+  sustain" is actionable. If `attack.centroidHz` is on target but
+  `sustain.centroidHz` is too high, the fix is a steady-state filter,
+  not an envelope follower. Iterating one (phase, dimension) per cycle
+  gives you a clean progress (or regression) signal.
 - **Keep a mental log of past `vₙ`.** It lets you detect a regression
   — a descriptor that gets worse after an edit that was meant to
   improve it.
@@ -107,6 +136,9 @@ This is a fallback, not the main loop.
   must be grounded in descriptors or in verbal user feedback.
 - **Editing several dimensions at once** between renders — you lose
   the trace of what improved what.
+- **Reasoning about the sound as monolithic** — every render has
+  three phases. Identify the deviating phase first, then the
+  deviating dimension within it.
 - **Resubmitting the same code under a different filename** hoping
   for a different result — the sha1 (and therefore the rendered
   audio) is determined by the code content.
