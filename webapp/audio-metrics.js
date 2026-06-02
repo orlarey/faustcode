@@ -287,51 +287,100 @@ function harmonicProfileAbsolute(seg, f0, sr, nHarm = 16) {
 }
 
 /**
- * Inter-harmonic noise floor in dBFS-like units. We measure the energy
- * falling in narrow gaps BETWEEN harmonics (k·f0 + 30…50 Hz for
- * k = 1..40) — same windows the HNR computation uses for its
- * denominator — and express the average level on the same absolute
- * dB scale as harmonicProfileAbsolute. An implausibly low value
- * (< -90 dB) flags a synthetic-clean signal ; acoustic sources sit
- * typically in [-80, -40] dB depending on breath / bow / air noise.
+ * Mark bins that fall under (or very near) any harmonic of f0 within a
+ * proportional guard band `0.3·f0`. Returns the Uint8Array mask, the
+ * bin index of the harmonic frontier (last bin still within k·f0 of
+ * some partial, used to scope noise estimation to the band where
+ * partials actually live), and binHz / nBins for downstream callers.
+ *
+ * The proportional guard band is the key correction over 0.8.0 : a
+ * fixed 30 Hz window after each partial captures the Hann side-lobes
+ * of the partial itself (tonal energy) instead of the noise floor,
+ * and grossly overestimates the noise where partials are strong
+ * (bass bands). 0.3·f0 = ~40 Hz at f0 = 130 Hz ; scales correctly
+ * with f0 everywhere else.
+ */
+function markHarmonicBins(mag, binHz, f0, nyquist) {
+  const nBins = mag.length;
+  const guardBand = 0.3 * f0;
+  const isHarm = new Uint8Array(nBins);
+  let kMax = 0;
+  for (let k = 1; k <= 40; k++) {
+    const tg = k * f0;
+    if (tg > nyquist - 200) break;
+    const lo = Math.max(0, Math.floor((tg - guardBand) / binHz));
+    const hi = Math.min(nBins - 1, Math.ceil((tg + guardBand) / binHz));
+    for (let i = lo; i <= hi; i++) isHarm[i] = 1;
+    kMax = k;
+  }
+  // Harmonic-bearing band frontier : measure noise only within this
+  // range (above it we'd factor in HF noise that does not concern HNR).
+  const maxHarmonicHz = Math.min(kMax * f0 + 0.5 * f0, nyquist);
+  const harmonicBandBins = Math.max(1, Math.floor(maxHarmonicHz / binHz));
+  return { isHarm, kMax, harmonicBandBins };
+}
+
+/**
+ * Inter-harmonic noise floor in dBFS-like units. Now uses density-of-
+ * non-harmonic-bins extrapolation (cf. SPEC_SPECTRUMSERIES §3.2),
+ * with the proportional guard band of `markHarmonicBins`. An
+ * implausibly low value (< -90 dB) flags a synthetic-clean signal ;
+ * acoustic sources sit typically in [-80, -40] dB depending on
+ * breath / bow / air noise.
  */
 function interHarmonicFloorDb(seg, f0, sr) {
   const { mag, binHz } = windowedFft(seg, sr, 8);
   const nyquist = sr / 2;
-  let z = 0;
+  const { isHarm, harmonicBandBins } = markHarmonicBins(mag, binHz, f0, nyquist);
+  let sumPower = 0;
   let count = 0;
-  for (let k = 1; k <= 40; k++) {
-    const tg = k * f0;
-    if (tg > nyquist - 200) break;
-    z += sumSquaredInBand(mag, binHz, tg + 30, tg + 50);
-    count++;
+  for (let i = 0; i < harmonicBandBins; i++) {
+    if (!isHarm[i]) {
+      sumPower += mag[i] * mag[i];
+      count++;
+    }
   }
   if (count === 0) return -200;
-  const meanPower = z / count;
-  const meanMag = Math.sqrt(meanPower);
+  const density = sumPower / count;
+  const noiseRmsPerBin = Math.sqrt(density);
   const refMag = seg.length / 4;
-  return Math.round(20 * Math.log10(meanMag / refMag + 1e-12) * 10) / 10;
+  return Math.round(20 * Math.log10(noiseRmsPerBin / refMag + 1e-12) * 10) / 10;
 }
 
 /**
- * Harmonic-to-noise ratio in dB. Accumulates harmonic energy in narrow
- * windows around k·f0 (±8 Hz) and noise energy in inter-harmonic gaps
- * (k·f0 + 30…50 Hz) for k = 1..40 — stop once a harmonic would land
- * within 200 Hz of Nyquist. The marker of "breath" / broadband
- * background.
+ * Harmonic-to-noise ratio in dB. Harmonic energy = sum over tight
+ * ±8 Hz windows around k·f0. Noise energy = density of non-harmonic
+ * bins extrapolated to the harmonic-bearing band width — same
+ * support as the harmonic energy, so the ratio is meaningful. The
+ * proportional guard band (0.3·f0) suppresses the partial side-lobe
+ * contamination that biased 0.8.0's HNR downward by 10–30 dB on
+ * low-f0 signals.
  */
 function hnrDb(seg, f0, sr) {
   const { mag, binHz } = windowedFft(seg, sr, 8);
   const nyquist = sr / 2;
+  const { isHarm, harmonicBandBins } = markHarmonicBins(mag, binHz, f0, nyquist);
   let h = 0;
-  let z = 0;
   for (let k = 1; k <= 40; k++) {
     const tg = k * f0;
     if (tg > nyquist - 200) break;
     h += sumSquaredInBand(mag, binHz, tg - 8, tg + 8);
-    z += sumSquaredInBand(mag, binHz, tg + 30, tg + 50);
   }
-  return Math.round(10 * Math.log10(h / (z + 1e-12)) * 10) / 10;
+  let nSum = 0;
+  let nCount = 0;
+  for (let i = 0; i < harmonicBandBins; i++) {
+    if (!isHarm[i]) {
+      nSum += mag[i] * mag[i];
+      nCount++;
+    }
+  }
+  if (nCount === 0) return 200;
+  const density = nSum / nCount;
+  // Equivalent noise energy if extrapolated to the harmonic-bearing
+  // band width — same number of bins the harmonic energy is summed
+  // over, so the ratio reads as energy-in-partials vs noise-in-band.
+  const nEnergyEquiv = density * harmonicBandBins;
+  return Math.round(10 * Math.log10(h / (nEnergyEquiv + 1e-12)) * 10) / 10;
 }
 
 /**
