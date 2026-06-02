@@ -29,19 +29,14 @@ import {
   releaseComputerMidiNotes,
   isTypingTarget
 } from './shared/run-midi-utils.js';
-import {
-  buildLogBands,
-  detectTopPeaks,
-  computeSpectrumFeatures,
-  computeAudioQuality
-} from './shared/run-spectrum-utils.js';
+import { computeAudioQuality } from './shared/run-spectrum-utils.js';
 import {
   findTriggeredWindow,
   drawScopeGrid,
   drawFreqAxis,
   drawSpectrumGrid
 } from './shared/run-scope-utils.js';
-import { aggregateMaxHold } from '../spectrum.js';
+import { aggregateMaxHold, buildSpectrumSummary as buildSpectrumSummaryShared } from '../spectrum.js';
 import { injectLibsIntoFs, LIB_INCLUDE_ARG } from '../lib-inject.js';
 import { listSessions } from '../sessions.js';
 
@@ -3456,12 +3451,13 @@ function sendSpectrumSnapshot(scope, data, meta) {
   lastSpectrumSentAt = now;
   const floorDb = typeof meta.floorDb === 'number' ? meta.floorDb : -110;
   const safeData = Array.from(data, (v) => (Number.isFinite(v) ? v : floorDb));
-  const summary = buildSpectrumSummary(scope, safeData, {
-    capturedAt: now,
-    fmin: meta.fmin,
-    fmax: meta.fmax,
-    floorDb,
-    audioQuality: meta.audioQuality
+  const summary = buildSpectrumSummaryShared({
+    freqData: safeData,
+    timeData: meta.timeData || null,
+    audioQuality: meta.audioQuality || undefined,
+    sampleRate: Number.isFinite(scope.sampleRate) ? scope.sampleRate : 44100,
+    fftSize: Number.isFinite(scope.fftSize) ? scope.fftSize : 2048,
+    prevSummary: lastSpectrumSummary,
   });
   if (summary) {
     lastSpectrumSummary = summary;
@@ -3484,51 +3480,6 @@ function sendSpectrumSnapshot(scope, data, meta) {
       spectrumSummary: summary || undefined
     })
   }).catch(() => {});
-}
-
-/**
- * Purpose: Implement `buildSpectrumSummary` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function buildSpectrumSummary(scope, data, meta) {
-  if (!Array.isArray(data) || data.length < 8) return null;
-  const sampleRate = Number.isFinite(scope.sampleRate) ? scope.sampleRate : 44100;
-  const fftSize = Number.isFinite(scope.fftSize) ? scope.fftSize : 2048;
-  const fmin = Number.isFinite(meta.fmin) ? meta.fmin : 20;
-  const fmax = Number.isFinite(meta.fmax) ? meta.fmax : sampleRate / 2;
-  const floorDb = Number.isFinite(meta.floorDb) ? meta.floorDb : -110;
-  const bandsCount = 32;
-  const peaksCount = 8;
-  const bandsDbQ = buildLogBands(data, sampleRate, fmin, fmax, bandsCount, floorDb);
-  const peaks = detectTopPeaks(data, sampleRate, fmax, floorDb, peaksCount);
-  const features = computeSpectrumFeatures(data, sampleRate, fmax, floorDb);
-  const previous = lastSpectrumSummary && lastSpectrumSummary.features ? lastSpectrumSummary.features : null;
-  const delta = previous
-    ? {
-        rmsDbQ: features.rmsDbQ - previous.rmsDbQ,
-        centroidHz: features.centroidHz - previous.centroidHz,
-        rolloff95Hz: features.rolloff95Hz - previous.rolloff95Hz,
-        flatnessQ: features.flatnessQ - previous.flatnessQ,
-        crestDbQ: features.crestDbQ - previous.crestDbQ
-      }
-    : undefined;
-  return {
-    type: 'spectrum_summary_v1',
-    capturedAt: meta.capturedAt,
-    frame: {
-      sampleRate: Math.round(sampleRate),
-      fftSize: Math.round(fftSize),
-      fmin: Math.round(fmin),
-      fmax: Math.round(fmax),
-      floorDb: Math.round(floorDb),
-      bandsCount
-    },
-    bandsDbQ,
-    peaks,
-    features,
-    audioQuality: meta.audioQuality || undefined,
-    delta
-  };
 }
 
 /**
@@ -3815,6 +3766,7 @@ function setupScope(context, node, scope) {
         fmin: 20,
         fmax: scope.sampleRate / 2,
         floorDb: -110,
+        timeData: buffer,
         audioQuality: lastAudioQuality || undefined
       });
       scope.sampleCounter += buffer.length;

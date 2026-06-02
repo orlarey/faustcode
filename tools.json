@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.9.0",
+  "contractVersion": "0.10.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -27,7 +27,7 @@
     },
     "SpectrumSummary": {
       "type": "object",
-      "description": "Compact spectrum representation, version 1. SEMANTICS DEPENDS ON THE PRODUCER : (a) live tap (`get_spectrum`, `render_audio detail=light`) → `bandsDbQ` is the FULL spectrum max-held into 32 log-spaced bands ; `peaks` are local maxima of the dB curve. (b) `render_audio detail=spectrumSeries` → `bandsDbQ` is the NOISE-ONLY residual, 8 perceptual Bark groups (sub / low / low-mid / mid / upper-mid / presence / brilliance / air) ; `peaks` are tonal partials extracted by parabolic-interp peak picking with proportional guard band (0.3·f0). Distinguish by `frame.bandsCount` (32 vs 8). cf. SPECIFICATION_SPECTRUM.md and SPEC_SPECTRUMSERIES.md.",
+      "description": "Compact spectrum representation, version 1 (unified shape since 0.10.0 — same semantics across live tap, render_audio detail=light, and each frame of detail=spectrumSeries). `peaks` are tonal partials (local maxima above threshold rel strongest, parabolic-interp frequency, -3 dB Q). `bandsDbQ` is the NOISE-only residual after removing the partials' guard zones (0.3·f0, or 40 Hz fallback), aggregated into 8 perceptual Bark groups labelled sub / low / low-mid / mid / upper-mid / presence / brilliance / air. `f0Hz` is the time-domain f0 estimate (0 if no time-domain data was available). `features` carries centroid / rolloff95 / flatness plus rmsDbQ / crestDbQ (time-domain-accurate when possible). `audioQuality` reports clipping / DC offset / click diagnostics on the time samples and is now produced for offline frames too. `delta` (if present) carries feature deltas vs the previous summary. cf. SPEC_SPECTRUMSERIES.md.",
       "properties": {
         "type": { "const": "spectrum_summary_v1" },
         "capturedAt": { "type": "number" },
@@ -39,10 +39,11 @@
             "fmin": { "type": "number" },
             "fmax": { "type": "number" },
             "floorDb": { "type": "number" },
-            "bandsCount": { "type": "number" }
+            "bandsCount": { "type": "number", "description": "Always 8 since 0.10.0." }
           }
         },
-        "bandsDbQ": { "type": "array", "items": { "type": "number" } },
+        "f0Hz": { "type": "number", "description": "Fundamental estimate (Hz) from time-domain samples, 0 if no f0 found / no timeData." },
+        "bandsDbQ": { "type": "array", "items": { "type": "number" }, "description": "Noise-only level per Bark group (sub / low / low-mid / mid / upper-mid / presence / brilliance / air), in dB." },
         "peaks": {
           "type": "array",
           "items": {

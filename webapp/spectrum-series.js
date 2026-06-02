@@ -21,6 +21,7 @@
 // frame of the buffer is always emitted, so callers can read the tail.
 
 import { fftRadix2, hanning, nextPow2, estimateF0, freqToBark } from './audio-metrics.js';
+import { computeAudioQuality } from './views/shared/run-spectrum-utils.js';
 
 // Eight 3-Bark groups : sub / low / low-mid / mid / upper-mid / presence /
 // brilliance / air. Hz ranges derived from the inverse of Traunmüller.
@@ -212,6 +213,12 @@ export function analyzeFrame(seg, sr, f0Hint) {
   const peakDbFs = timePeak > 0 ? 20 * Math.log10(timePeak) : FLOOR_DB;
   const crestDb = peakDbFs - rmsDbFs;
 
+  // audioQuality on the (windowed-but-recoverable) raw time-domain segment.
+  // We pass seg.subarray(0, N) — pre-window samples — so clipping is
+  // measured on the actual rendered signal, not on the Hann-attenuated copy.
+  const timeView = seg.subarray ? seg.subarray(0, N) : seg.slice(0, N);
+  const audioQuality = computeAudioQuality(timeView);
+
   return {
     type: 'spectrum_summary_v1',
     frame: {
@@ -232,6 +239,7 @@ export function analyzeFrame(seg, sr, f0Hint) {
       flatnessQ: Math.round(Math.max(0, Math.min(1, flatness)) * 100),
       crestDbQ: Math.round(crestDb),
     },
+    audioQuality,
   };
 }
 
