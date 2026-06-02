@@ -23,7 +23,7 @@ for (let z = 0; z <= 24; z++) {
 
 // Traunmüller (1990) closed-form Hz → Bark conversion. Clamped to
 // [0, 24] so the table lookup above is always safe.
-function freqToBark(f) {
+export function freqToBark(f) {
   return Math.max(0, Math.min(24, 26.81 * f / (1960 + f) - 0.53));
 }
 
@@ -58,7 +58,7 @@ function crestDb(seg) {
  * of two ; re and im are mutated. ~50 LoC ; fast enough for the
  * zero-padded spectra we compute (typically N ≤ 262144).
  */
-function fftRadix2(re, im) {
+export function fftRadix2(re, im) {
   const n = re.length;
   if ((n & (n - 1)) !== 0) {
     throw new Error('FFT length must be a power of 2');
@@ -99,13 +99,13 @@ function fftRadix2(re, im) {
   }
 }
 
-function nextPow2(n) {
+export function nextPow2(n) {
   let p = 1;
   while (p < n) p <<= 1;
   return p;
 }
 
-function hanning(n) {
+export function hanning(n) {
   const w = new Float32Array(n);
   if (n === 1) { w[0] = 1; return w; }
   for (let i = 0; i < n; i++) {
@@ -225,7 +225,7 @@ function findPlateau(buffer, sr, frac = 0.6, minLenS = 0.5) {
  * @param {number} fmax    Hz, default 400
  * @returns {number}       f0 in Hz
  */
-function estimateF0(seg, sr, fmin = 50, fmax = 400) {
+export function estimateF0(seg, sr, fmin = 50, fmax = 400) {
   const { mag, binHz } = windowedFft(seg, sr, 8);
   // Pic dominant in [fmin, fmax].
   const lo = Math.max(0, Math.ceil(fmin / binHz));

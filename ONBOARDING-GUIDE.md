@@ -77,6 +77,51 @@ These descriptors are designed to make "frozen", "sterile", "missing
 top end", and "buzzy" visible *as numbers* — without them, you would
 need to listen to the WAV, which you cannot.
 
+### Comparing without the audio: `detail=spectrumSeries`
+
+You cannot hear the render — but you do not need the WAV. Beyond the
+phased `metrics`, `render_audio detail=spectrumSeries` returns a
+**time series of spectra** (`SpectrumSeries`) : the spectral
+*trajectory* of the render. Frames are adaptively sampled — dense
+where the spectrum or level changes, sparse where they do not. A long
+gap in `tMs` between two frames is itself a signal : "the render is
+stationary in that interval".
+
+**Encode your target the same way.** From the reference sound, write
+it as a trajectory in the *same vocabulary* : an ADSR envelope plus a
+handful of dated spectra (attack, body, sustain, tail), each =
+partials (`peaks`, dB) + noise (`bandsDbQ`, 8 perceptual Bark groups
+ranging from `sub` to `air`). This is your target, directly diffable
+against what faustcode returns.
+
+**Compare trajectory vs target on three independent axes :**
+
+| Axis | Read | If the render deviates |
+| :--- | :--- | :--- |
+| **Partials** (`peaks`) | harmonic dB shape over time | highs too low → *dull*: lift upper partials (waveshaping, bright-component mix), don't touch noise. Too high → *harsh*. |
+| **Noise** (`bandsDbQ`, noise-only by band) | per-band noise level over time | bands too high → *breathy / hissy*: lower the noise layer in those bands. Near-silent + `hnrDb` very high → *sterile*: add broadband noise (acoustic floor ≈ −80…−40 dB). |
+| **Trajectory** (across `tMs`) | how the spectrum moves | highs arriving all at once at onset → *plastered attack*: stagger per-rank rise times (harmonic cascade). Long gap in the trajectory + still-loud frames either side → stationary content where the target has motion → *frozen*: add slow detune, micro-vibrato, per-partial AM. |
+
+**Hard-won invariants** (each validated by blind A/B) :
+
+- Noise is constitutive, not decoration — a partials-only render
+  sounds wrong ; a very high `hnrDb` is a red flag, not a win.
+- A tonal partial below ~5 kHz must stay a partial — folding it into
+  a noise band sounds *dull and veiled* even at −35 / −45 dB.
+- Faint high partials matter collectively (brilliance); dropping them
+  dulls, smoothing them into a spectral envelope fails (the high tail
+  is *formantic*, not a slope).
+- Separate partials from noise by subtraction, never by zeroing FFT
+  bins.
+- Two orthogonal tells : low HNR = too much noise (hiss); low HF
+  peak / valley contrast = bruitised highs (dullness). Good renders
+  score high on both.
+
+**Loop.** read trajectory → find the largest deviation on ONE axis →
+change ONE Faust parameter in ONE phase → re-render → re-compare. The
+WAV fallback (`detail=wav` + manual upload) becomes unnecessary once
+you drive on the trajectory.
+
 ---
 
 ## The flagship scenario: reproducing a sound provided by the user

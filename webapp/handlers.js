@@ -49,6 +49,7 @@ import { renderOffline, fingerprintRender } from './offline-render.js';
 import { encodeFloat32Wav, computePeakRms, bytesToBase64 } from './wav-encode.js';
 import { buildSpectrumSummary } from './spectrum.js';
 import { buildAudioMetrics } from './audio-metrics.js';
+import { buildSpectrumSeries } from './spectrum-series.js';
 import { injectLibsIntoFs, isLibFilename, LIB_INCLUDE_ARG } from './lib-inject.js';
 
 /**
@@ -647,7 +648,9 @@ async function render_audio(args) {
     ? 'wav'
     : args.detail === 'metrics'
       ? 'metrics'
-      : 'light';
+      : args.detail === 'spectrumSeries'
+        ? 'spectrumSeries'
+        : 'light';
   const sha1 = activeSha1OrThrow();
   const session = getSession(sha1);
   if (!session) throw new Error(`Session not found: ${sha1}`);
@@ -695,6 +698,34 @@ async function render_audio(args) {
         channels: buffer.numberOfChannels,
         durationMs,
         analyserFftSize,
+      },
+    };
+  }
+
+  if (detail === 'spectrumSeries') {
+    const seriesOpts = {};
+    if (args.spectrumSeriesOptions && typeof args.spectrumSeriesOptions === 'object') {
+      const s = args.spectrumSeriesOptions;
+      if (typeof s.varThresholdDb === 'number') seriesOpts.varThresholdDb = s.varThresholdDb;
+      if (typeof s.fftSize === 'number') seriesOpts.fftSize = s.fftSize;
+      if (typeof s.hop === 'number') seriesOpts.hop = s.hop;
+      if (typeof s.f0Hint === 'number') seriesOpts.f0Hint = s.f0Hint;
+    }
+    const { series, framesAnalysed, framesKept } = buildSpectrumSeries(buffer, seriesOpts);
+    return {
+      mime: 'application/json',
+      content: {
+        type: 'spectrum_series_v1',
+        series,
+        framesAnalysed,
+        framesKept,
+      },
+      render: {
+        sha1,
+        fingerprint: fp,
+        sampleRate: buffer.sampleRate,
+        channels: buffer.numberOfChannels,
+        durationMs,
       },
     };
   }

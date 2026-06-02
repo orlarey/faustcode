@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.8.1",
+  "contractVersion": "0.9.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -27,7 +27,7 @@
     },
     "SpectrumSummary": {
       "type": "object",
-      "description": "Compact spectrum representation, version 1 (cf. SPECIFICATION_SPECTRUM.md).",
+      "description": "Compact spectrum representation, version 1. SEMANTICS DEPENDS ON THE PRODUCER : (a) live tap (`get_spectrum`, `render_audio detail=light`) → `bandsDbQ` is the FULL spectrum max-held into 32 log-spaced bands ; `peaks` are local maxima of the dB curve. (b) `render_audio detail=spectrumSeries` → `bandsDbQ` is the NOISE-ONLY residual, 8 perceptual Bark groups (sub / low / low-mid / mid / upper-mid / presence / brilliance / air) ; `peaks` are tonal partials extracted by parabolic-interp peak picking with proportional guard band (0.3·f0). Distinguish by `frame.bandsCount` (32 vs 8). cf. SPECIFICATION_SPECTRUM.md and SPEC_SPECTRUMSERIES.md.",
       "properties": {
         "type": { "const": "spectrum_summary_v1" },
         "capturedAt": { "type": "number" },
@@ -1014,8 +1014,8 @@
         "properties": {
           "detail": {
             "type": "string",
-            "enum": ["light", "metrics", "wav"],
-            "description": "Output flavour. `light`: spectrum_summary_v1 (fast tap near 80% of the render, low cost — good for big-grain iteration). `metrics`: audio_metrics_v2 — phased analysis with envelope dynamics, attack/sustain/release blocks, sustain features algorithmically aligned with horn_metrics.py (librosa) for cross-tool comparison. `wav`: Float32 IEEE_FLOAT WAV written to disk, path in structured content (see description for the Claude Desktop caveat)."
+            "enum": ["light", "metrics", "spectrumSeries", "wav"],
+            "description": "Output flavour. `light`: spectrum_summary_v1 (fast tap near 80% of the render, low cost — good for big-grain iteration). `metrics`: audio_metrics_v2 — phased analysis with envelope dynamics, attack/sustain/release blocks, sustain features algorithmically aligned with horn_metrics.py (librosa) for cross-tool comparison. `spectrumSeries`: a TIME SERIES of compact spectra (`SpectrumSeries`) — partials separated from noise, noise expressed in 8 perceptual Bark groups, frames emitted by adaptive sampling so the trajectory is dense where the spectrum changes and sparse where it does not. This is the canonical feedback for AI-driven sound design : trajectory of the render, directly diffable against the AI's mental model of the target — see ONBOARDING-GUIDE.md. `wav`: Float32 IEEE_FLOAT WAV written to disk, path in structured content (see description for the Claude Desktop caveat)."
           },
           "durationMs": { "type": "number", "exclusiveMinimum": 0, "maximum": 30000 },
           "sampleRate": { "type": "number", "minimum": 8000, "maximum": 192000 },
@@ -1040,6 +1040,17 @@
               "required": ["atMs", "path", "value"],
               "additionalProperties": false
             }
+          },
+          "spectrumSeriesOptions": {
+            "type": "object",
+            "description": "Only meaningful when detail='spectrumSeries'. Tunes the trajectory : varThresholdDb (default 3) governs frame-keep density (smaller = denser trajectory), fftSize defaults to 8192 samples (170 ms @ 48 kHz), hop to 2048, f0Hint pins the fundamental for partial guarding (avoids autodetection misfires on the attack).",
+            "properties": {
+              "varThresholdDb": { "type": "number", "exclusiveMinimum": 0, "description": "RMS profile-distance threshold (dB) for adaptive sampling. Lower = more frames kept (default 3)." },
+              "fftSize": { "type": "integer", "minimum": 256, "description": "STFT window length, samples. Should be a power of 2 (default 8192)." },
+              "hop": { "type": "integer", "minimum": 64, "description": "STFT hop, samples (default 2048)." },
+              "f0Hint": { "type": "number", "exclusiveMinimum": 0, "description": "Pin the fundamental (Hz) for partial guard-band sizing. Skip f0 estimation per frame ; useful when the DSP's f0 is known to the caller (typical : an hslider)." }
+            },
+            "additionalProperties": false
           },
           "metricsOptions": {
             "type": "object",
@@ -1094,6 +1105,34 @@
             "properties": {
               "mime": { "const": "application/json" },
               "content": { "$ref": "#/$defs/AudioMetricsV2" },
+              "render": {
+                "type": "object",
+                "properties": {
+                  "sha1": { "$ref": "#/$defs/Sha1" },
+                  "fingerprint": { "type": "string" },
+                  "sampleRate": { "type": "number" },
+                  "channels": { "type": "integer" },
+                  "durationMs": { "type": "number" }
+                },
+                "required": ["sha1", "fingerprint", "sampleRate", "channels", "durationMs"]
+              }
+            },
+            "required": ["mime", "content", "render"]
+          },
+          {
+            "properties": {
+              "mime": { "const": "application/json" },
+              "content": {
+                "type": "object",
+                "description": "Spectrum-series payload : an array of dated SpectrumSummary, plus frame-counting metadata. Frames are picked adaptively so the series is dense where the spectrum changes, sparse where it does not — typical magnitudes : ~10–20 frames in the attack, 5–15 in the sustain, a handful in the release.",
+                "properties": {
+                  "type": { "const": "spectrum_series_v1" },
+                  "series": { "$ref": "#/$defs/SpectrumSeries" },
+                  "framesAnalysed": { "type": "integer" },
+                  "framesKept": { "type": "integer" }
+                },
+                "required": ["type", "series", "framesAnalysed", "framesKept"]
+              },
               "render": {
                 "type": "object",
                 "properties": {
