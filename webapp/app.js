@@ -24,6 +24,7 @@ import {
   setPlaybackAudioSession,
 } from './play-gate.js';
 import { openShareDialog } from './share-ui.js';
+import { showNotice } from './notice.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -677,8 +678,11 @@ async function switchView(viewId, options = {}) {
   state.currentView = effectiveViewId;
   generateViewSelect();
 
-  if (!isRemote) {
+  if (!isRemote && !state.showcase.active) {
     // Protect against transient POST failures that could make pollState restore an old remote view.
+    // Not for the showcase's automatic switches : they are no user choice, and
+    // the sticky window would make pollState ignore an MCP / shared-link
+    // set_view for 8 s after ENTER.
     localViewStickyUntil = Date.now() + 8000;
   }
 
@@ -1916,18 +1920,6 @@ async function prepareAudioGate() {
     audioGateButton.textContent = 'Tap to play';
     audioGate.classList.add('is-tap-to-play');
   }
-}
-
-/**
- * Purpose: Short, non-blocking message (fades out by itself).
- */
-function showNotice(message, durationMs = 6000) {
-  const el = document.createElement('div');
-  el.className = 'app-notice';
-  el.setAttribute('role', 'status');
-  el.textContent = message;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), durationMs);
 }
 
 if (audioGateButton) {

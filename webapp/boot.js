@@ -36,6 +36,8 @@ import {
   stripShareParams,
   setShareIntent,
 } from './share-link.js';
+import { tryHandOff, installHandoffResponder } from './tab-handoff.js';
+import { showNotice } from './notice.js';
 // Install the live mirror bus on window.__faustEditorBus before any
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
@@ -44,6 +46,23 @@ const WEBAPP_VERSION = '0.10.0';
 
 // 1. Synchronously install the fetch shim BEFORE any view code runs.
 installApiShim();
+
+const bootParams = new URLSearchParams(location.search);
+
+// libfaust-wasm loads in parallel — needed by the shim's /api/submit and
+// by the run view's audio runtime. For a shared link it waits for the
+// hand-off decision (a tab that hands its DSP off never needs it).
+let faustPreloaded = false;
+function preloadFaust() {
+  if (faustPreloaded) return;
+  faustPreloaded = true;
+  appendLog('info', 'loading libfaust-wasm…');
+  getFaust().then((f) => {
+    appendLog('info', `libfaust-wasm ready : Faust ${f.version} (import=${f.timings.importMs}ms, instantiate=${f.timings.instantiateMs}ms)`);
+  }).catch((err) => {
+    appendLog('err', 'libfaust-wasm failed :', String(err));
+  });
+}
 
 // ---------------------------------------------------------------------
 // MCP pill + drawer + activity log
@@ -142,6 +161,7 @@ setStatus('idle', 'idle');
 // ---------------------------------------------------------------------
 
 let contract = null;
+let mcpReady = false; // this tab holds the MCP bridge (tab-handoff status)
 
 function startConnect() {
   if (!contract) {
@@ -169,6 +189,7 @@ function startConnect() {
           setStatus('connecting', 'handshaking…');
           break;
         case 'ready':
+          mcpReady = true;
           appendLog('info', `handshake done — mcpVersion=${detail.mcpVersion} contractVersion=${detail.contractVersion}`);
           setStatus('ok', 'MCP connected');
           if (disconnectBtn) disconnectBtn.disabled = false;
@@ -176,12 +197,14 @@ function startConnect() {
           setLastMcpUrl(url);
           break;
         case 'close':
+          mcpReady = false;
           appendLog('warn', 'WS closed', detail ? `(${detail})` : '');
           setStatus('idle', 'disconnected');
           if (disconnectBtn) disconnectBtn.disabled = true;
           if (connectBtn) connectBtn.disabled = false;
           break;
         case 'error':
+          mcpReady = false;
           appendLog('err', 'WS error :', String(detail));
           setStatus('error', 'error');
           if (disconnectBtn) disconnectBtn.disabled = true;
@@ -193,6 +216,7 @@ function startConnect() {
           if (connectBtn) connectBtn.disabled = false;
           break;
         case 'superseded':
+          mcpReady = false;
           // Another faustcode tab took the MCP bridge from us. The
           // ws-client has stopped its retry loop ; we surface a
           // distinct state so the user knows what happened.
@@ -227,6 +251,35 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
 // ---------------------------------------------------------------------
 
 (async () => {
+  // Shared link (?code=…) : first try to hand the DSP to the faustcode tab
+  // already open (tab-handoff.js), before loading anything. A tab that
+  // handed it off, or that saw another tab answer, never auto-connects
+  // to MCP : the bridge accepts one tab and would drop the one in use.
+  let shared = null;
+  let mcpAutoConnect = true;
+  if (bootParams.has('code')) {
+    try {
+      shared = await decodeShareParams(bootParams);
+    } catch (err) {
+      setShareIntent({ error: 'This link does not contain readable Faust code.' });
+      appendLog('warn', 'shared link ignored :', String(err && err.message ? err.message : err));
+    }
+    if (shared) {
+      const handoff = await tryHandOff(shared);
+      if (handoff.outcome !== 'none') mcpAutoConnect = false;
+      if (handoff.outcome === 'handed') {
+        appendLog('info', `shared link : ${shared.name} handed to tab ${handoff.target.tabId.slice(0, 8)}`);
+        await showHandedOffPage(shared.name); // resolves on « Open here instead »
+      } else if (handoff.outcome === 'failed') {
+        appendLog('warn', `shared link : tab ${handoff.target.tabId.slice(0, 8)} did not confirm (${handoff.error}) — opening here`);
+      }
+    }
+  }
+  if (SHARE_PARAMS.some((p) => bootParams.has(p))) {
+    history.replaceState(history.state, '', stripShareParams(location.href));
+  }
+  preloadFaust();
+
   if (wsInput) {
     const params = new URLSearchParams(location.search);
     const urlFromQuery = params.get('mcp');
@@ -266,37 +319,26 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     () => (wsInput ? wsInput.value : ''),
   );
 
-  // Shared-DSP link (?code=…, cf. share-link.js) : compile + store the
-  // session BEFORE app.js boots, so the audio gate's ENTER lands on it.
-  // Sessions are keyed by sha1 : opening the same link twice reuses the
-  // existing session. The link parameters are then removed from the
-  // address bar (mcp / token kept) so a reload does not re-import.
-  const bootParams = new URLSearchParams(location.search);
-  if (SHARE_PARAMS.some((p) => bootParams.has(p))) {
+  // Shared-DSP link loaded in THIS tab (cf. share-link.js) : compile +
+  // store the session BEFORE app.js boots, so the audio gate's ENTER
+  // lands on it. Sessions are keyed by sha1 : opening the same link
+  // twice reuses the existing session.
+  if (shared) {
     try {
-      const shared = await decodeShareParams(bootParams);
-      if (shared) {
-        const r = await fetch('/api/submit', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: shared.code, filename: shared.name }),
-        });
-        const result = await r.json().catch(() => ({}));
-        if (!r.ok || typeof result.sha1 !== 'string') throw new Error(result.error || 'submit failed');
-        if (result.errors && String(result.errors).trim()) {
-          // Like a dropped file : a DSP that does not compile is not
-          // stored as a session ; its errors are shown.
-          setShareIntent({ error: `Shared DSP ${shared.name} does not compile :\n${result.errors}` });
-          appendLog('warn', `shared link : ${shared.name} does not compile`);
-        } else {
-          setShareIntent({ sha1: result.sha1, view: shared.view, poly: shared.poly });
-          appendLog('info', `shared link : ${shared.name} (${result.sha1.slice(0, 8)}) view=${shared.view} poly=${shared.poly}`);
-        }
+      const result = await submitShared(shared);
+      if (result.errors && String(result.errors).trim()) {
+        // Like a dropped file : a DSP that does not compile is not
+        // stored as a session ; its errors are shown.
+        setShareIntent({ error: `Shared DSP ${shared.name} does not compile :\n${result.errors}` });
+        appendLog('warn', `shared link : ${shared.name} does not compile`);
+      } else {
+        setShareIntent({ sha1: result.sha1, view: shared.view, poly: shared.poly });
+        appendLog('info', `shared link : ${shared.name} (${result.sha1.slice(0, 8)}) view=${shared.view} poly=${shared.poly}`);
       }
     } catch (err) {
       setShareIntent({ error: 'This link does not contain readable Faust code.' });
       appendLog('warn', 'shared link ignored :', String(err && err.message ? err.message : err));
     }
-    history.replaceState(history.state, '', stripShareParams(location.href));
   }
 
   // Load the original app.js (symlinked to ../public/app.js). The ?v=
@@ -348,15 +390,85 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     }
   }, 500);
 
+  // Become a hand-off target for the shared links opened later.
+  installHandoffResponder({
+    getStatus: () => ({ audioUnlocked: isAudioUnlocked(), mcpConnected: mcpReady }),
+    onOpen: openSharedFromOtherTab,
+  });
+
   const params = new URLSearchParams(location.search);
-  if (params.get('mcp') || getLastMcpUrl()) startConnect();
+  if (mcpAutoConnect && (params.get('mcp') || getLastMcpUrl())) startConnect();
+  else if (!mcpAutoConnect) appendLog('info', 'MCP auto-connect skipped : another faustcode tab is open (use Connect to take the bridge)');
 })();
 
-// libfaust-wasm loads in parallel — needed by the shim's /api/submit and
-// by the run view's audio runtime.
-appendLog('info', 'loading libfaust-wasm…');
-getFaust().then((f) => {
-  appendLog('info', `libfaust-wasm ready : Faust ${f.version} (import=${f.timings.importMs}ms, instantiate=${f.timings.instantiateMs}ms)`);
-}).catch((err) => {
-  appendLog('err', 'libfaust-wasm failed :', String(err));
-});
+async function submitShared({ code, name }) {
+  const r = await fetch('/api/submit', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, filename: name }),
+  });
+  const result = await r.json().catch(() => ({}));
+  if (!r.ok || typeof result.sha1 !== 'string') throw new Error(result.error || 'submit failed');
+  return result;
+}
+
+function isAudioUnlocked() {
+  const gate = document.getElementById('audio-gate');
+  return !!gate && gate.classList.contains('hidden');
+}
+
+/**
+ * A new tab handed us a shared DSP. Acknowledge as soon as the sha1 is
+ * known (the new tab waits 2 s at most), then compile and show it the
+ * same way an MCP client would : submit → set_view → set_polyphony.
+ * While the audio gate is still up, ENTER will land on it instead.
+ */
+async function openSharedFromOtherTab(shared) {
+  const bytes = new TextEncoder().encode(shared.code);
+  const digest = await crypto.subtle.digest('SHA-1', bytes);
+  const sha1 = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  void (async () => {
+    const call = (op, args) => dispatch({ id: `handoff-${op}-${Date.now()}`, op, args });
+    const sub = await call('submit', { code: shared.code, filename: shared.name });
+    if (!sub.ok || (sub.result.errors && String(sub.result.errors).trim())) {
+      const why = sub.ok ? sub.result.errors : sub.error.message;
+      appendLog('warn', `shared link from another tab : ${shared.name} does not compile`);
+      showNotice(`Shared link ${shared.name} does not compile : ${String(why).split('\n')[0]}`, 10000);
+      return;
+    }
+    appendLog('info', `shared link from another tab : ${shared.name} (${sha1.slice(0, 8)})`);
+    if (!isAudioUnlocked()) {
+      setShareIntent({ sha1, view: shared.view, poly: shared.poly });
+    } else {
+      await call('set_view', { view: shared.view });
+      if (shared.view === 'run') await call('set_polyphony', { voices: shared.poly });
+    }
+    showNotice(`Opened from a shared link: ${shared.name}`);
+    try { window.focus(); } catch { /* ignore */ }
+  })();
+  return sha1;
+}
+
+/**
+ * The tab that handed its DSP off : a plain page, then try to close it
+ * (allowed for a script-less-history tab opened by a link). Resolves when
+ * the user asks to open the DSP here instead.
+ */
+function showHandedOffPage(name) {
+  return new Promise((resolve) => {
+    const page = document.createElement('div');
+    page.className = 'handoff-page';
+    page.innerHTML = `
+      <div class="handoff-card">
+        <p class="handoff-title">Opened in your faustcode tab</p>
+        <p class="handoff-name"></p>
+        <button type="button" class="primary-btn handoff-here">Open here instead</button>
+      </div>`;
+    page.querySelector('.handoff-name').textContent = name;
+    page.querySelector('.handoff-here').addEventListener('click', () => {
+      page.remove();
+      resolve();
+    });
+    document.body.appendChild(page);
+    setTimeout(() => { try { window.close(); } catch { /* ignore */ } }, 400);
+  });
+}
