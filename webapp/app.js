@@ -16,6 +16,7 @@ import {
 } from './app/helpers.js';
 import { createTooltipManager } from './app/ui-utils.js';
 import { SHOWCASE_CODE, SHOWCASE_FILENAME, state } from './app/state.js';
+import { takeShareIntent } from './share-link.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -1811,6 +1812,25 @@ if (editSessionBtn) {
  * later click does not reuse the stale value.
  */
 async function landOnEntrySession() {
+  // A shared link (?code=…) wins over the last-used session.
+  const share = takeShareIntent();
+  if (share && share.sha1) {
+    state.preBootActiveSha = null;
+    const idx = state.sessions.findIndex((s) => s.sha1 === share.sha1);
+    if (idx >= 0) {
+      state.currentView = share.view;
+      state.runGlobal.polyVoices = share.poly;
+      await loadSessionByIndex(idx);
+      return;
+    }
+  }
+  await landOnLastSession();
+  // Unreadable or non-compiling link : the caller shows this once the
+  // gate is gone (landing clears the error banner).
+  return share && share.error ? share.error : null;
+}
+
+async function landOnLastSession() {
   const lastSha = state.preBootActiveSha;
   state.preBootActiveSha = null;
   const showcaseSha = state.showcase && state.showcase.sha;
@@ -1838,8 +1858,9 @@ if (audioGateButton) {
   audioGateButton.addEventListener('click', async () => {
     stopShowcasePreview();
     if (state.audioUnlocked) {
-      await landOnEntrySession();
+      const notice = await landOnEntrySession();
       hideAudioGate();
+      if (notice) showError(notice);
       return;
     }
     audioGateButton.disabled = true;
@@ -1849,9 +1870,10 @@ if (audioGateButton) {
       state.audioUnlocked = true;
       state.runGlobal.audioRunning = true;
       await syncState({ audioUnlocked: true });
-      await landOnEntrySession();
+      const notice = await landOnEntrySession();
       hideAudioGate();
       hideError();
+      if (notice) showError(notice);
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       showAudioGate(message);

@@ -30,6 +30,12 @@ import { dispatch } from './handlers.js';
 import { getFaust } from './faust.js';
 import { initSetupMcp } from './setup-mcp.js';
 import * as floatingEditor from './floating-editor.js';
+import {
+  SHARE_PARAMS,
+  decodeShareParams,
+  stripShareParams,
+  setShareIntent,
+} from './share-link.js';
 // Install the live mirror bus on window.__faustEditorBus before any
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
@@ -259,6 +265,39 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     () => (contract ? contract.contractVersion : '0.0.0'),
     () => (wsInput ? wsInput.value : ''),
   );
+
+  // Shared-DSP link (?code=…, cf. share-link.js) : compile + store the
+  // session BEFORE app.js boots, so the audio gate's ENTER lands on it.
+  // Sessions are keyed by sha1 : opening the same link twice reuses the
+  // existing session. The link parameters are then removed from the
+  // address bar (mcp / token kept) so a reload does not re-import.
+  const bootParams = new URLSearchParams(location.search);
+  if (SHARE_PARAMS.some((p) => bootParams.has(p))) {
+    try {
+      const shared = await decodeShareParams(bootParams);
+      if (shared) {
+        const r = await fetch('/api/submit', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: shared.code, filename: shared.name }),
+        });
+        const result = await r.json().catch(() => ({}));
+        if (!r.ok || typeof result.sha1 !== 'string') throw new Error(result.error || 'submit failed');
+        if (result.errors && String(result.errors).trim()) {
+          // Like a dropped file : a DSP that does not compile is not
+          // stored as a session ; its errors are shown.
+          setShareIntent({ error: `Shared DSP ${shared.name} does not compile :\n${result.errors}` });
+          appendLog('warn', `shared link : ${shared.name} does not compile`);
+        } else {
+          setShareIntent({ sha1: result.sha1, view: shared.view, poly: shared.poly });
+          appendLog('info', `shared link : ${shared.name} (${result.sha1.slice(0, 8)}) view=${shared.view} poly=${shared.poly}`);
+        }
+      }
+    } catch (err) {
+      setShareIntent({ error: 'This link does not contain readable Faust code.' });
+      appendLog('warn', 'shared link ignored :', String(err && err.message ? err.message : err));
+    }
+    history.replaceState(history.state, '', stripShareParams(location.href));
+  }
 
   // Load the original app.js (symlinked to ../public/app.js). The ?v=
   // cache buster forces Chrome to bypass its module map, which would
