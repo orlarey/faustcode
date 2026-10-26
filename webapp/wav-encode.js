@@ -1,9 +1,11 @@
-// wav-encode.js — encode an AudioBuffer as Float32 WAV (IEEE_FLOAT, format=3).
+// wav-encode.js — WAV encoders : Float32 (IEEE_FLOAT, format=3) for the
+// measurement pipeline, 24-bit PCM for the Run view recorder.
 //
-// Float32 is intentional : Faust runs in float internally and we ship the
-// data to a measurement pipeline (librosa, scipy). Preserving the full
-// dynamic range avoids 16-bit PCM quantization noise contaminating fine
-// metrics like HNR in the noise floor.
+// For render_audio, Float32 is intentional : Faust runs in float
+// internally and we ship the data to a measurement pipeline (librosa,
+// scipy). Preserving the full dynamic range avoids 16-bit PCM
+// quantization noise contaminating fine metrics like HNR in the noise
+// floor.
 //
 // The output is a standard WAVE container that librosa.load(path, sr=None)
 // reads without any special flag.
@@ -61,6 +63,84 @@ export function encodeFloat32Wav(audioBuffer) {
     for (let c = 0; c < channels; c++) {
       view.setFloat32(offset, chData[c][i], true);
       offset += 4;
+    }
+  }
+  return bytes;
+}
+
+const WAVE_FORMAT_PCM = 1;
+const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
+const PCM24_SCALE = 8388607; // 2^23 - 1
+
+/**
+ * Encode planar Float32 channels as 24-bit signed PCM WAV, interleaved,
+ * little-endian. Used by the Run view recorder (human-facing export, so
+ * integer PCM for maximum player compatibility ; 24 bits keeps quiet
+ * tails clean without a dither stage).
+ *
+ * WAVE_FORMAT_PCM up to 2 channels, WAVE_FORMAT_EXTENSIBLE beyond (as
+ * required for > 2 channels or > 16 bits by strict readers).
+ * Samples are clamped to [-1, 1], then scaled by 2^23 - 1 and rounded.
+ *
+ * @param {Float32Array[]} channels  one array per channel, equal lengths
+ * @param {number} sampleRate
+ * @returns {Uint8Array}
+ */
+export function encodePcm24Wav(channels, sampleRate) {
+  const numChannels = channels.length;
+  const frames = numChannels > 0 ? channels[0].length : 0;
+  const bytesPerSample = 3;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = frames * blockAlign;
+  const extensible = numChannels > 2;
+  const fmtSize = extensible ? 40 : 16;
+  const headerSize = 12 + 8 + fmtSize + 8;
+  const padded = dataSize + (dataSize & 1); // RIFF chunks are word-aligned
+  const total = headerSize + padded;
+
+  const bytes = new Uint8Array(total);
+  const view = new DataView(bytes.buffer);
+
+  view.setUint32(0, RIFF, true);
+  view.setUint32(4, total - 8, true);
+  view.setUint32(8, WAVE, true);
+
+  view.setUint32(12, FMT, true);
+  view.setUint32(16, fmtSize, true);
+  view.setUint16(20, extensible ? WAVE_FORMAT_EXTENSIBLE : WAVE_FORMAT_PCM, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bytesPerSample * 8, true);
+  if (extensible) {
+    view.setUint16(36, 22, true);                      // cbSize
+    view.setUint16(38, bytesPerSample * 8, true);      // wValidBitsPerSample
+    view.setUint32(40, 0, true);                       // dwChannelMask : no speaker mapping (Faust outputs are discrete)
+    // SubFormat GUID KSDATAFORMAT_SUBTYPE_PCM 00000001-0000-0010-8000-00aa00389b71
+    view.setUint32(44, WAVE_FORMAT_PCM, true);
+    view.setUint16(48, 0x0000, true);
+    view.setUint16(50, 0x0010, true);
+    bytes.set([0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71], 52);
+  }
+
+  const dataOffset = headerSize - 8;
+  view.setUint32(dataOffset, DATA, true);
+  view.setUint32(dataOffset + 4, dataSize, true);
+
+  let offset = headerSize;
+  for (let i = 0; i < frames; i++) {
+    for (let c = 0; c < numChannels; c++) {
+      let x = channels[c][i];
+      if (x > 1) x = 1;
+      else if (x < -1) x = -1;
+      else if (x !== x) x = 0; // NaN
+      const v = Math.round(x * PCM24_SCALE);
+      bytes[offset] = v & 0xff;
+      bytes[offset + 1] = (v >> 8) & 0xff;
+      bytes[offset + 2] = (v >> 16) & 0xff;
+      offset += 3;
     }
   }
   return bytes;

@@ -2142,6 +2142,71 @@ footer > * {
   cursor: default;
 }
 
+.run-record-toggle {
+  font-size: 0.74rem;
+  color: var(--ui-text-pill);
+  white-space: nowrap;
+  border: 1px solid var(--ui-accent-border-strong);
+  border-radius: 999px;
+  padding: 0.12rem 0.6rem;
+  background: var(--ui-pill-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: transform 0.08s ease, box-shadow 0.16s ease;
+}
+
+.run-record-toggle:hover:not(:disabled) {
+  background: var(--ui-pill-bg-hover);
+}
+
+.run-record-toggle:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--ui-press-shadow);
+}
+
+.run-record-toggle:focus-visible {
+  box-shadow: var(--ui-focus-shadow);
+  outline: none;
+}
+
+.run-record-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.run-record-toggle .run-record-dot {
+  color: #ff5a5a;
+}
+
+.run-record-toggle.is-armed {
+  animation: run-record-blink 1s steps(2, start) infinite;
+}
+
+.run-record-toggle.is-recording {
+  border-color: #ff5a5a;
+  color: #ffd6d6;
+  background: rgba(255, 90, 90, 0.18);
+}
+
+@keyframes run-record-blink {
+  to { opacity: 0.35; }
+}
+
+.run-record-status {
+  font-size: 0.72rem;
+  color: var(--ui-text-pill);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.run-record-status:empty {
+  display: none;
+}
+
+.run-record-status.is-warning {
+  color: #ffb35a;
+}
+
 .run-header-title {
   justify-self: start;
   letter-spacing: 0.06em;

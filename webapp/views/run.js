@@ -38,7 +38,8 @@ import {
 } from './shared/run-scope-utils.js';
 import { aggregateMaxHold, buildSpectrumSummary as buildSpectrumSummaryShared } from '../spectrum.js';
 import { injectLibsIntoFs, LIB_INCLUDE_ARG } from '../lib-inject.js';
-import { listSessions } from '../sessions.js';
+import { listSessions, getSession } from '../sessions.js';
+import { RunRecorder } from '../recorder.js';
 
 // Audio graph runtime (single active DSP instance for the Run view).
 let audioContext = null;
@@ -46,6 +47,10 @@ let dspNode = null;
 let analyserNode = null;
 let outputNode = null;
 let audioRunning = false;
+// Record button (see recorder.js) : the active recording, if any, and the
+// mounted view's refresh hook so module-level audio code can update it.
+let runRecorder = null;
+let recordUi = null;
 let scopeRafId = null;
 let scopeState = null;
 let currentSha = null;
@@ -255,6 +260,10 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
           <span>Audio</span>
           <span id="run-audio-toggle-value" class="run-audio-toggle-value">Off</span>
         </button>
+        <button id="run-record-toggle" class="run-record-toggle" type="button" disabled>
+          <span class="run-record-dot">●</span> <span id="run-record-label">Rec</span>
+        </button>
+        <span id="run-record-status" class="run-record-status" aria-live="polite"></span>
         <label class="run-header-pill">
           <span>Mode</span>
           <select id="run-mode">
@@ -740,6 +749,104 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
       await startAudio();
     }
   });
+
+  // Record button : Idle → Armed (waits for sound) → Recording → file.
+  const recordButton = runRoot.querySelector('#run-record-toggle');
+  const recordLabel = runRoot.querySelector('#run-record-label');
+  const recordStatus = runRoot.querySelector('#run-record-status');
+  let recordNotice = null; // { text, warning } shown while idle
+  let lastRecordPaintAt = 0;
+  const refreshRecord = (force = true) => {
+    const now = performance.now();
+    if (!force && now - lastRecordPaintAt < 100) return;
+    lastRecordPaintAt = now;
+    const state = runRecorder ? runRecorder.state : 'idle';
+    recordButton.disabled =
+      state === 'finalizing' || (state === 'idle' && (!audioRunning || getDspOutputCount() < 1));
+    recordButton.classList.toggle('is-armed', state === 'armed');
+    recordButton.classList.toggle('is-recording', state === 'recording');
+    recordLabel.textContent = state === 'armed' ? 'Armed' : state === 'recording' ? 'Stop' : 'Rec';
+    recordButton.firstElementChild.textContent = state === 'recording' ? '■' : '●';
+    // aria-label, not title : the app tooltip manager derives titles from it.
+    const hint =
+      state === 'idle'
+        ? audioRunning
+          ? 'Record the DSP output to a 24-bit WAV (starts at the first sound)'
+          : 'Turn Audio on to record'
+        : 'Stop recording and download the WAV';
+    recordButton.setAttribute('aria-label', hint);
+    recordButton.title = hint;
+    let text = '';
+    let warning = false;
+    if (state === 'armed') {
+      text = 'waiting for sound';
+    } else if (state === 'recording') {
+      const t = runRecorder.core.elapsedSec;
+      const m = Math.floor(t / 60);
+      const sec = (t - m * 60).toFixed(1).padStart(4, '0');
+      const peak = runRecorder.core.peak;
+      const peakDb = peak > 0 ? `${(20 * Math.log10(peak)).toFixed(1)} dB` : '−∞ dB';
+      text = `${m}:${sec} · peak ${peakDb}`;
+      warning = peak > 1;
+    } else if (state === 'finalizing') {
+      text = 'writing file…';
+    } else if (recordNotice) {
+      text = recordNotice.text;
+      warning = recordNotice.warning;
+    }
+    recordStatus.textContent = text;
+    recordStatus.classList.toggle('is-warning', warning);
+  };
+  recordUi = { refresh: refreshRecord };
+
+  const startRecording = async () => {
+    if (runRecorder || !audioRunning || !audioContext || !dspNode) return;
+    const numChannels = getDspOutputCount();
+    if (numChannels < 1) return;
+    const session = getSession(currentSha);
+    const recorder = new RunRecorder({
+      context: audioContext,
+      source: dspNode,
+      numChannels,
+      sessionFilename: session && session.filename,
+      onChange: () => { if (recordUi) recordUi.refresh(false); },
+      onDone: (report) => {
+        if (runRecorder === recorder) runRecorder = null;
+        if (report) {
+          const secs = (report.frames / report.sampleRate).toFixed(1);
+          recordNotice = report.clippedSamples > 0
+            ? {
+                text: `${report.filename} · ${report.clippedSamples} clipped samples (${report.clippedPercent.toFixed(3)} %)`,
+                warning: true,
+              }
+            : { text: `${report.filename} · ${secs} s`, warning: false };
+          console.info('[record]', report);
+        }
+        if (recordUi) recordUi.refresh();
+      },
+    });
+    runRecorder = recorder;
+    recordNotice = null;
+    refreshRecord();
+    try {
+      await recorder.arm();
+    } catch (err) {
+      console.error('Record error:', err);
+      if (runRecorder === recorder) runRecorder = null;
+      recordNotice = { text: `record failed: ${err && err.message ? err.message : err}`, warning: true };
+    }
+    refreshRecord();
+  };
+
+  recordButton.addEventListener('click', async () => {
+    if (recordButton.disabled) return;
+    if (runRecorder) {
+      stopRecording({ flush: true });
+    } else {
+      await startRecording();
+    }
+  });
+  refreshRecord();
 
   // Expose the startAudio / stopAudio / polyphony closures so MCP
   // handlers can drive this same runtime instead of a parallel one.
@@ -3586,6 +3693,7 @@ export function dispose() {
   releasePressedUiButtons();
   uninstallUiReleaseGuard();
   cleanupAudio();
+  recordUi = null;
   compiledGenerator = null;
   compiledUI = null;
   faustUIInstance = null;
@@ -3665,6 +3773,8 @@ export function dispose() {
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function cleanupAudio() {
+  // Write the file from what has already arrived, before the graph goes.
+  stopRecording({ flush: false });
   releasePressedUiButtons();
   uninstallUiReleaseGuard();
   if (scopeRafId) {
@@ -3802,6 +3912,7 @@ function startAudioOutput() {
   } catch {
     // ignore
   }
+  if (recordUi) recordUi.refresh();
 }
 
 /**
@@ -3809,6 +3920,9 @@ function startAudioOutput() {
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function stopAudioOutput() {
+  // Audio Off ends the recording (and writes the file) : the user no
+  // longer hears what would be recorded.
+  stopRecording({ flush: true });
   if (!outputNode) return;
   try {
     outputNode.disconnect();
@@ -3816,6 +3930,26 @@ function stopAudioOutput() {
     // ignore
   }
   audioRunning = false;
+  if (recordUi) recordUi.refresh();
+}
+
+/**
+ * Purpose: End the active recording, if any (armed : no file ; recording : write the WAV).
+ * How: `flush` waits briefly for the samples still buffered in the recorder worklet.
+ */
+function stopRecording({ flush }) {
+  if (!runRecorder) return;
+  void runRecorder.stop({ flush });
+  if (recordUi) recordUi.refresh();
+}
+
+/**
+ * Purpose: Number of DSP outputs, i.e. channels to record.
+ */
+function getDspOutputCount() {
+  if (!dspNode) return 0;
+  if (typeof dspNode.getNumOutputs === 'function') return dspNode.getNumOutputs();
+  return dspNode.numberOfOutputs > 0 ? dspNode.channelCount : 0;
 }
 
 /**
