@@ -17,6 +17,7 @@ import {
 import { createTooltipManager } from './app/ui-utils.js';
 import { SHOWCASE_CODE, SHOWCASE_FILENAME, state } from './app/state.js';
 import { takeShareIntent } from './share-link.js';
+import { openShareDialog } from './share-ui.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -36,6 +37,7 @@ const deleteSessionBtn = document.getElementById('delete-session');
 const refreshSessionBtn = document.getElementById('refresh-session');
 const editSessionBtn = document.getElementById('edit-session');
 const archiveBtn = document.getElementById('archive-btn');
+const shareBtn = document.getElementById('share-btn');
 const audioGate = document.getElementById('audio-gate');
 const audioGateButton = document.getElementById('audio-gate-button');
 const audioGateStatus = document.getElementById('audio-gate-status');
@@ -929,6 +931,7 @@ function updateSessionNavigation() {
     sessionPrev.disabled = currentDisplayPos >= totalDisplayItems - 1;
     sessionNext.disabled = currentDisplayPos <= 0;
     if (deleteSessionBtn) deleteSessionBtn.classList.add('hidden');
+    if (shareBtn) shareBtn.disabled = true;
     if (refreshSessionBtn) refreshSessionBtn.classList.add('hidden');
     if (editSessionBtn) editSessionBtn.classList.add('hidden');
   } else {
@@ -944,6 +947,7 @@ function updateSessionNavigation() {
     sessionPrev.disabled = currentDisplayPos >= totalDisplayItems - 1;
     sessionNext.disabled = currentDisplayPos <= 0;
     if (deleteSessionBtn) deleteSessionBtn.classList.remove('hidden');
+    if (shareBtn) shareBtn.disabled = isLive;
     if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
     if (editSessionBtn) {
       if (isLive) {
@@ -1432,6 +1436,25 @@ async function downloadCurrentViewArtifact(format = '') {
 }
 
 // Event listeners
+if (shareBtn) {
+  shareBtn.addEventListener('click', async () => {
+    const session = getCurrentSession();
+    if (!session || !state.currentSha) return;
+    try {
+      const response = await fetch(`/api/${state.currentSha}/user_code.dsp`);
+      if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
+      const code = await response.text();
+      await openShareDialog({
+        code,
+        filename: session.filename,
+        poly: state.runGlobal.polyVoices || 0,
+      });
+    } catch (err) {
+      showError(`Share failed: ${err.message}`);
+    }
+  });
+}
+
 if (archiveBtn) {
   archiveBtn.addEventListener('click', async () => {
     try {

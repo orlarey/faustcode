@@ -64,3 +64,15 @@ test('local hosts share the public URL', async () => {
   assert.ok(!/mcp|token/.test(url));
   assert.match(url, /&name=a\.dsp&view=run&poly=4$/);
 });
+
+test('QR : level M for short links, L above 1000 chars, none beyond capacity', async () => {
+  const { buildQr } = await import('./share-ui.js');
+  const url = (n) => PUBLIC_BASE_URL + '?code=' + 'A'.repeat(n - PUBLIC_BASE_URL.length - 6);
+  const short = buildQr(url(380));
+  assert.equal(short.level, 'M');
+  assert.match(short.svg, /^<svg shape-rendering="crispEdges" /);
+  const long = buildQr(url(1780));
+  assert.equal(long.level, 'L');
+  assert.ok(long.modules > short.modules);
+  assert.equal(buildQr(url(3500)), null);
+});

@@ -322,3 +322,122 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
       rgba(255, 255, 255, 0.18) 72%, rgba(255, 255, 255, 0.18) 82%,
       transparent 82%);
 }
+
+/* ---------------------------------------------------------------------
+ * Share dialog + Projection mode (share-ui.js)
+ * ------------------------------------------------------------------- */
+
+.share-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(10, 10, 10, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.share-card {
+  max-width: min(720px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  background: var(--ui-header-glass);
+  border: 1px solid var(--ui-accent-border);
+  border-radius: var(--ui-radius-panel);
+  padding: var(--ui-space-3) var(--ui-space-4) var(--ui-space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ui-space-2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.share-head {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.share-head h2 {
+  margin: 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-text-title);
+}
+
+.share-qr {
+  max-width: 100%;
+  background: #fff;
+  line-height: 0;
+}
+
+.share-qr svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.share-warning {
+  color: #ffb35a;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.share-meta {
+  color: var(--ui-text-secondary);
+  font-size: 0.78rem;
+}
+
+.share-url {
+  align-self: stretch;
+  min-width: min(480px, 80vw);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.72rem;
+  color: var(--ui-text-value);
+  background: var(--ui-value-bg);
+  border: 1px solid var(--ui-accent-border-soft);
+  border-radius: 6px;
+  padding: var(--ui-space-2);
+  resize: vertical;
+  word-break: break-all;
+}
+
+.share-actions {
+  display: flex;
+  gap: var(--ui-space-2);
+}
+
+.share-projection {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: #fff;
+  color: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2vh;
+  cursor: pointer;
+}
+
+.share-projection-qr {
+  width: min(86vh, 96vw);
+  line-height: 0;
+}
+
+.share-projection-qr svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.share-projection-name {
+  font-size: 4vh;
+  font-weight: 600;
+  font-family: system-ui, sans-serif;
+}
