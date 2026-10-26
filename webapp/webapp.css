@@ -441,3 +441,154 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   font-weight: 600;
   font-family: system-ui, sans-serif;
 }
+
+/* ---------------------------------------------------------------------
+ * Phone : « Tap to play » gate + transient notice (play-gate.js)
+ * ------------------------------------------------------------------- */
+
+.audio-gate.is-tap-to-play #audio-gate-button {
+  font-size: 1.4rem;
+  padding: 1.1rem 2.4rem;
+  min-height: 64px;
+  margin-top: var(--ui-space-2);
+}
+
+.audio-gate.is-tap-to-play #audio-gate-title {
+  text-transform: none;
+}
+
+.app-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 1.2rem;
+  transform: translateX(-50%);
+  z-index: 1400;
+  max-width: calc(100vw - 2rem);
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--ui-radius-pill);
+  background: rgba(20, 25, 34, 0.94);
+  border: 1px solid var(--ui-accent-border);
+  color: var(--ui-text-pill);
+  font-size: 0.8rem;
+  pointer-events: none;
+  animation: app-notice-fade 6s ease forwards;
+}
+
+@keyframes app-notice-fade {
+  0%, 85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ---------------------------------------------------------------------
+ * Phones (portrait ≤ 480 px wide, or landscape touch ≤ 500 px high) :
+ * two-row header without secondary actions, Run view = DSP controls
+ * first (regular UI only, oscilloscope folded, no Download / MIDI).
+ * ------------------------------------------------------------------- */
+
+@media (max-width: 480px), (pointer: coarse) and (max-height: 500px) {
+  header {
+    grid-template-columns: auto 1fr;
+    grid-template-areas:
+      "brand controls"
+      "nav nav";
+    row-gap: var(--ui-space-1);
+    padding: var(--ui-space-1) var(--ui-space-2);
+  }
+
+  .header-brand { grid-area: brand; }
+  .header-controls { grid-area: controls; justify-content: flex-end; gap: var(--ui-space-1); }
+  .header-nav { grid-area: nav; justify-content: center; min-width: 0; }
+
+  #header-app-version,
+  #delete-session,
+  #archive-btn,
+  #mcp-pill,
+  #edit-session,
+  #refresh-session {
+    display: none !important;
+  }
+
+  #session-label {
+    min-width: 0;
+    max-width: calc(100vw - 120px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  header .icon-btn,
+  header .primary-btn,
+  #view-select {
+    min-height: 36px;
+  }
+
+  main {
+    padding: var(--ui-space-2);
+    padding-top: 96px;
+    padding-bottom: 32px;
+  }
+
+  .run-header .download-select-group,
+  .run-header .run-header-pill:has(#midi-input) {
+    display: none;
+  }
+
+  .run-header-controls button,
+  .run-header-controls select {
+    min-height: 36px;
+  }
+
+  .run-controls {
+    min-height: 62vh;
+    padding: var(--ui-space-1);
+  }
+
+  .run-controls-split {
+    grid-template-columns: 1fr;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .run-controls-pane-orbit {
+    display: none;
+  }
+
+  /* Taller than the pane : scroll from the top (a centred flex child
+     would be clipped above). */
+  .run-ui-zoom-wrap {
+    align-items: flex-start;
+  }
+
+  .run-scope-title {
+    cursor: pointer;
+  }
+
+  .run-scope-title::after {
+    content: ' ▸';
+  }
+
+  .run-scope.is-open .run-scope-title::after {
+    content: ' ▾';
+  }
+
+  .run-scope:not(.is-open) .run-scope-controls,
+  .run-scope:not(.is-open) #scope-canvas {
+    display: none;
+  }
+}
+
+/* Landscape phones : enough width for a one-row header, little height. */
+@media (pointer: coarse) and (max-height: 500px) and (min-width: 600px) {
+  header {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "brand nav controls";
+  }
+
+  main {
+    padding-top: 56px;
+  }
+
+  .run-controls {
+    min-height: 0;
+  }
+}

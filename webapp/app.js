@@ -16,7 +16,13 @@ import {
 } from './app/helpers.js';
 import { createTooltipManager } from './app/ui-utils.js';
 import { SHOWCASE_CODE, SHOWCASE_FILENAME, state } from './app/state.js';
-import { takeShareIntent } from './share-link.js';
+import { takeShareIntent, peekShareIntent } from './share-link.js';
+import {
+  isTouchDevice,
+  codeWantsSensors,
+  requestSensorPermission,
+  setPlaybackAudioSession,
+} from './play-gate.js';
 import { openShareDialog } from './share-ui.js';
 
 // Core DOM elements.
@@ -95,7 +101,8 @@ async function loadViews() {
         id: viewName,
         name: module.getName(),
         render: module.render,
-        dispose: module.dispose
+        dispose: module.dispose,
+        prime: module.primeAudioContext
       });
     } catch (err) {
       console.error(`Failed to load view ${viewName}:`, err);
@@ -1877,8 +1884,68 @@ async function landOnLastSession() {
   }
 }
 
+/**
+ * Purpose: Decide what the gate tap must do for the session it lands on.
+ * How: A shared link opened on a touch device turns the gate into « Tap
+ * to play ». Sensor permission (iOS) is requested only when the DSP has
+ * [acc:…] / [gyr:…] metadata ; the Run AudioContext is created in the
+ * tap when the link lands on the Run view.
+ */
+async function prepareAudioGate() {
+  const share = peekShareIntent();
+  const shared = !!(share && share.sha1);
+  const landingSha = shared ? share.sha1 : state.preBootActiveSha;
+  state.gatePlan = { wantsSensors: false, primeRun: shared && share.view === 'run' };
+  if (!landingSha) return;
+  try {
+    const response = await fetch(`/api/${landingSha}/user_code.dsp`);
+    if (response.ok) state.gatePlan.wantsSensors = codeWantsSensors(await response.text());
+  } catch {
+    // ignore
+  }
+  if (shared && isTouchDevice() && audioGate && audioGateButton) {
+    const session = state.sessions.find((s) => s.sha1 === landingSha);
+    const title = audioGate.querySelector('#audio-gate-title');
+    const text = audioGate.querySelector('.audio-gate-card p');
+    if (title && session) title.textContent = session.filename.replace(/\.dsp$/i, '');
+    if (text) {
+      text.textContent = state.gatePlan.wantsSensors
+        ? 'Shared Faust DSP. Tap to start the sound, then tilt your phone.'
+        : 'Shared Faust DSP. Tap to start the sound.';
+    }
+    audioGateButton.textContent = 'Tap to play';
+    audioGate.classList.add('is-tap-to-play');
+  }
+}
+
+/**
+ * Purpose: Short, non-blocking message (fades out by itself).
+ */
+function showNotice(message, durationMs = 6000) {
+  const el = document.createElement('div');
+  el.className = 'app-notice';
+  el.setAttribute('role', 'status');
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), durationMs);
+}
+
 if (audioGateButton) {
   audioGateButton.addEventListener('click', async () => {
+    // Synchronous part of the gesture first (iOS) : sensor permission,
+    // playback audio session, Run AudioContext.
+    const plan = state.gatePlan || {};
+    const sensors = plan.wantsSensors ? requestSensorPermission() : null;
+    setPlaybackAudioSession();
+    if (plan.primeRun) {
+      const runView = state.views.find((v) => v.id === 'run');
+      if (runView && typeof runView.prime === 'function') runView.prime();
+    }
+    if (sensors) {
+      sensors.then((result) => {
+        if (result === 'denied') showNotice('Motion sensors are off (permission denied) : sound only.');
+      });
+    }
     stopShowcasePreview();
     if (state.audioUnlocked) {
       const notice = await landOnEntrySession();
@@ -2045,6 +2112,7 @@ async function init() {
   state.sessionIndex = state.sessions.length;
   updateSessionNavigation();
   hideInterface();
+  await prepareAudioGate();
   showAudioGate();
   state.audioUnlocked = false;
   await startShowcasePreview();

@@ -51,6 +51,9 @@ let audioRunning = false;
 // mounted view's refresh hook so module-level audio code can update it.
 let runRecorder = null;
 let recordUi = null;
+// AudioContext created inside the audio gate's tap (iOS only lets a
+// context start from a user gesture) and adopted by the next startAudio.
+let primedAudioContext = null;
 let scopeRafId = null;
 let scopeState = null;
 let currentSha = null;
@@ -361,6 +364,12 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
       container.classList.remove('run-view-host-swapping');
     }
   };
+
+  // Narrow screens fold the oscilloscope (CSS) ; its title unfolds it.
+  const scopeSection = runRoot.querySelector('.run-scope');
+  runRoot.querySelector('.run-scope-title').addEventListener('click', () => {
+    scopeSection.classList.toggle('is-open');
+  });
 
   const audioToggleButton = runRoot.querySelector('#run-audio-toggle');
   const audioToggleValue = runRoot.querySelector('#run-audio-toggle-value');
@@ -682,12 +691,13 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
       }
 
       if (!audioContext) {
-        audioContext = new AudioContext();
+        audioContext = takePrimedAudioContext() || new AudioContext();
         dspNode =
           polyVoices > 0
             ? await compiledGenerator.createNode(audioContext, polyVoices)
             : await compiledGenerator.createNode(audioContext);
         attachOutputParamHandler();
+        startDspSensors();
         outputNode = setupScope(audioContext, dspNode, scopeState);
       }
       applyParamValues();
@@ -2930,7 +2940,13 @@ function applyUiZoom() {
   const naturalHeight = Math.max(currentUiRoot.scrollHeight, currentUiRoot.offsetHeight, 1);
   const availableWidth = Math.max(zoomHost.clientWidth - 20, 1);
   const availableHeight = Math.max(zoomHost.clientHeight - 20, 1);
-  const fitScale = Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight);
+  // Touch screens : fit the width (up to 2×, finger-sized sliders) and
+  // never shrink below natural size for height — the pane scrolls
+  // vertically instead. Mouse : fit both, never above natural size.
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  const fitScale = coarse
+    ? Math.min(2, availableWidth / naturalWidth, Math.max(1, availableHeight / naturalHeight))
+    : Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight);
   const manualScale =
     uiZoom === 'auto'
       ? fitScale
@@ -3787,6 +3803,11 @@ function cleanupAudio() {
   stopAudioOutput();
   if (dspNode) {
     try {
+      if (typeof dspNode.stopSensors === 'function') dspNode.stopSensors();
+    } catch {
+      // ignore
+    }
+    try {
       dspNode.disconnect();
     } catch {
       // ignore
@@ -3941,6 +3962,44 @@ function stopRecording({ flush }) {
   if (!runRecorder) return;
   void runRecorder.stop({ flush });
   if (recordUi) recordUi.refresh();
+}
+
+/**
+ * Purpose: Create the Run AudioContext inside a user gesture (audio gate tap).
+ * How: Must be called synchronously from the click handler ; the next
+ * startAudio adopts it instead of creating a context outside the gesture.
+ */
+export function primeAudioContext() {
+  if (primedAudioContext && primedAudioContext.state !== 'closed') return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    primedAudioContext = new Ctx();
+    void primedAudioContext.resume();
+  } catch {
+    primedAudioContext = null;
+  }
+}
+
+function takePrimedAudioContext() {
+  const ctx = primedAudioContext;
+  primedAudioContext = null;
+  return ctx && ctx.state !== 'closed' ? ctx : null;
+}
+
+/**
+ * Purpose: Feed devicemotion / deviceorientation to DSPs with [acc:…] / [gyr:…].
+ * How: faustwasm's startSensors (same axis conventions as faust2wasm PWAs) ;
+ * listeners are removed by stopSensors in cleanupAudio.
+ */
+function startDspSensors() {
+  if (!dspNode || typeof dspNode.startSensors !== 'function') return;
+  if (!dspNode.hasAccInput && !dspNode.hasGyrInput) return;
+  try {
+    void dspNode.startSensors();
+  } catch (err) {
+    console.warn('Run sensors:', err);
+  }
 }
 
 /**
