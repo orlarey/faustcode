@@ -628,3 +628,25 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   font-family: ui-monospace, Menlo, monospace;
   color: var(--ui-text-pill);
 }
+
+/* Header icons drawn as text / SVG : the emoji glyphs (➕, 🗑) were
+   rendered in their own grey and ignored the theme colour, so the
+   active « new » and « delete » buttons looked disabled. */
+#new-session {
+  font-weight: 700;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0.1rem 0.55rem;
+}
+
+#delete-session {
+  line-height: 1;
+  padding: 0.1rem 0.5rem;
+}
+
+#delete-session svg {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  vertical-align: -0.12rem;
+}
