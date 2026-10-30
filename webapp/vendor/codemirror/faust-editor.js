@@ -181,7 +181,10 @@ export function createFaustEditor({ doc, parent, onSubmit, onDirty }) {
       if (applyingRemote) return;
       const text = update.state.doc.toString();
       setDirty(text !== pristineCode);
-      if (bus) bus.broadcastChanges(api, update.changes);
+      if (bus) {
+        bus.broadcastChanges(api, update.changes);
+        bus.noteEdit(text); // keep the unsaved text as the session's draft
+      }
     }),
   ];
 
@@ -234,6 +237,18 @@ export function createFaustEditor({ doc, parent, onSubmit, onDirty }) {
       setDirty(view.state.doc.toString() !== pristineCode);
     },
     _setBufferAndPristine,
+    _setBuffer(buffer, pristine) {
+      applyingRemote = true;
+      try {
+        if (view.state.doc.toString() !== buffer) {
+          view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: buffer } });
+        }
+      } finally {
+        applyingRemote = false;
+      }
+      pristineCode = pristine;
+      setDirty(buffer !== pristine);
+    },
     _applyRemoteChanges(changes) {
       applyingRemote = true;
       try { view.dispatch({ changes }); }

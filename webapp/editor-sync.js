@@ -13,18 +13,24 @@
 //     so the others go clean.
 //   - Session load : when the active session changes (navigation,
 //     MCP push, fresh boot…), the bus replaces every editor's buffer
-//     with the new code and resets pristine. Any unsaved local edits
-//     are lost — they should have been submitted first.
+//     with the new code and resets pristine — unless that session has
+//     an unsaved draft (drafts.js), which is restored instead (dirty).
+//   - Drafts : every local edit is recorded as the draft of the current
+//     session, so leaving the DSP view or the session no longer loses
+//     unsubmitted text.
 //
 // The bus is exposed on window.__faustEditorBus so the shared editor
 // factory (public/vendor/codemirror/faust-editor.js) can opt into it
 // without a hard import dependency (the Docker version of the app
 // doesn't load this module).
 
+import { getDraft, setDraft, clearDraft, clearDraftsWithCode } from './drafts.js';
+
 class FaustEditorBus {
   constructor() {
     this._editors = new Set();
     this._pristine = '';
+    this._sha = null; // session whose code is loaded (drafts are keyed by it)
   }
 
   /** Current pristine (last submitted) code. */
@@ -33,15 +39,32 @@ class FaustEditorBus {
   }
 
   /**
-   * Replace every editor's buffer with `code` and set it as the new
-   * pristine. Called on session navigation.
+   * Load a session : `code` (its stored version) becomes the pristine ;
+   * every editor shows the session's unsaved draft if any, else `code`.
+   * Called on session navigation and when the DSP view mounts. `sha`
+   * defaults to the session already loaded.
    */
-  loadSession(code) {
+  loadSession(code, sha = this._sha) {
     const text = typeof code === 'string' ? code : '';
     this._pristine = text;
+    this._sha = sha || null;
+    const buffer = this.currentBuffer();
     for (const ed of this._editors) {
-      ed._setBufferAndPristine(text);
+      ed._setBuffer(buffer, text);
     }
+  }
+
+  /** Text an editor should show for the loaded session : draft or stored code. */
+  currentBuffer() {
+    const draft = getDraft(this._sha);
+    return draft !== null ? draft : this._pristine;
+  }
+
+  /** Record a local edit as the loaded session's draft. */
+  noteEdit(text) {
+    if (!this._sha) return;
+    if (text === this._pristine) clearDraft(this._sha);
+    else setDraft(this._sha, text);
   }
 
   /**
@@ -52,6 +75,9 @@ class FaustEditorBus {
   markSubmitted(code) {
     const text = typeof code === 'string' ? code : '';
     this._pristine = text;
+    // The submitted text is stored now ; its draft — under the previous
+    // session, the active one may already have changed — is obsolete.
+    clearDraftsWithCode(text);
     for (const ed of this._editors) {
       ed._onPristineChange(text);
     }

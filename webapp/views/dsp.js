@@ -81,8 +81,14 @@ export async function render(container, { sha, sessionFilename, onSubmit, onDown
     const downloadBtn = container.querySelector('.code-download-btn');
     const downloadFormat = container.querySelector('.code-download-format');
 
+    // Load the session in the live mirror bus first : the editor then
+    // starts from the session's unsaved draft if there is one (dirty),
+    // else from the stored code.
+    const bus = typeof window !== 'undefined' ? window.__faustEditorBus : null;
+    if (bus) bus.loadSession(code, sha);
+
     editor = createFaustEditor({
-      doc: code,
+      doc: bus ? bus.currentBuffer() : code,
       parent: host,
       onSubmit: (text) => onSubmitCb ? onSubmitCb(text, currentFilename) : Promise.resolve(),
       onDirty: updateDirty,
@@ -104,6 +110,17 @@ export async function render(container, { sha, sessionFilename, onSubmit, onDown
   } catch (err) {
     container.innerHTML = `<div class="error">Error: ${err.message}</div>`;
   }
+}
+
+/** Unsubmitted editor text, or null when the editor matches the stored code. */
+export function getPendingCode() {
+  return editor && editor.isDirty() ? editor.view.state.doc.toString() : null;
+}
+
+/** The text was compiled and stored outside the editor (view switch) : mark it clean. */
+export function markSubmitted(code) {
+  const bus = typeof window !== 'undefined' ? window.__faustEditorBus : null;
+  if (bus) bus.markSubmitted(code);
 }
 
 export function dispose() {

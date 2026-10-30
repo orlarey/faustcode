@@ -103,7 +103,9 @@ async function loadViews() {
         name: module.getName(),
         render: module.render,
         dispose: module.dispose,
-        prime: module.primeAudioContext
+        prime: module.primeAudioContext,
+        getPendingCode: module.getPendingCode,
+        markSubmitted: module.markSubmitted
       });
     } catch (err) {
       console.error(`Failed to load view ${viewName}:`, err);
@@ -670,6 +672,27 @@ async function switchView(viewId, options = {}) {
   const effectiveViewId = getEffectiveView(viewId);
   const previousViewId = state.currentView;
   const changed = effectiveViewId !== state.currentView;
+
+  // Leaving the DSP view with edited, unsubmitted code : compile it first,
+  // so the next view (Run, Diagrams…) shows what was just typed. If it does
+  // not compile, stay in the DSP view with the errors ; the text stays
+  // there, unsaved. Remote switches (MCP) never compile behind the user's
+  // back : the draft keeps the text.
+  if (changed && !isRemote && previousViewId === 'dsp') {
+    const dspView = state.views.find((v) => v.id === 'dsp');
+    const pending = dspView && typeof dspView.getPendingCode === 'function' ? dspView.getPendingCode() : null;
+    if (pending !== null) {
+      const session = getCurrentSession();
+      const name = (session && session.filename) || 'patch.dsp';
+      const compiled = await submitCode(pending, name, { keepOnError: true, render: false });
+      if (!compiled) {
+        generateViewSelect(); // the view menu goes back to DSP Code
+        return;
+      }
+      if (typeof dspView.markSubmitted === 'function') dspView.markSubmitted(pending);
+    }
+  }
+
   hideError();
   if (changed) {
     captureScrollLine();
@@ -874,7 +897,10 @@ async function renderCurrentView(targetContainer = viewContainer) {
         // Used by the dsp editor view (Submit button / Cmd+S).
         // Falls back to the current session filename when none provided.
         const name = (filename && filename.trim()) || sessionFilename || 'patch.dsp';
-        await submitCode(code, name);
+        // A failure leaves the editor dirty (its draft is kept).
+        if (!(await submitCode(code, name, { keepOnError: true }))) {
+          throw new Error('not compiled');
+        }
       }
     });
     if (useAtomicStagingSwap && stagingLayer && targetContainer === viewContainer) {
@@ -1218,8 +1244,13 @@ async function unlockAudioGate() {
  * Purpose: Implement `submitCode` in the app flow.
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
-async function submitCode(code, filename) {
-  // Show loading state.
+async function submitCode(code, filename, { keepOnError = false, render = true } = {}) {
+  // keepOnError (code typed in an editor) : a DSP that does not compile is
+  //   not stored, so stay on the current session — the text remains in the
+  //   editor, unsaved — instead of switching to a session that does not exist.
+  // render : re-render the current view afterwards (false when the caller
+  //   is about to switch views anyway).
+  // Returns true when the code was compiled and stored.
   showLoading();
   hideError();
 
@@ -1237,6 +1268,11 @@ async function submitCode(code, filename) {
 
     if (!response.ok) {
       throw new Error(result.error || 'Submission failed');
+    }
+
+    if (keepOnError && result.errors && result.errors.trim()) {
+      showError(result.errors);
+      return false;
     }
 
     // Update local active-session state.
@@ -1259,10 +1295,12 @@ async function submitCode(code, filename) {
     await syncState({ sha1: state.currentSha, view: state.currentView });
 
     // Rendre la vue courante
-    await renderCurrentView();
+    if (render) await renderCurrentView();
+    return true;
 
   } catch (err) {
     showError(`Error: ${err.message}`);
+    return false;
   } finally {
     hideLoading();
   }

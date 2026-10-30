@@ -308,7 +308,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     const sha0 = getActiveSha1();
     if (sha0) {
       const s0 = getSession(sha0);
-      if (s0) editorBus.loadSession(s0.code);
+      if (s0) editorBus.loadSession(s0.code, sha0);
     }
   } catch (err) {
     appendLog('warn', 'OPFS hydration failed :', String(err));
@@ -358,6 +358,15 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     if (!r.ok || !result || typeof result.sha1 !== 'string') {
       throw new Error(result.error || 'submit failed');
     }
+    if (result.errors && String(result.errors).trim()) {
+      // Not stored : show why, and keep the text unsaved (draft kept).
+      const banner = document.getElementById('error-banner');
+      if (banner) {
+        banner.textContent = result.errors;
+        banner.classList.remove('hidden');
+      }
+      throw new Error('compilation failed');
+    }
     // Activate the new session so the view under the floating editor
     // (Run / SVG / signals…) refreshes with the freshly-compiled DSP.
     await fetch('/api/state', {
@@ -385,7 +394,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     if (sha !== lastShaForSync) {
       lastShaForSync = sha;
       const s = sha ? getSession(sha) : null;
-      editorBus.loadSession(s ? s.code : '');
+      editorBus.loadSession(s ? s.code : '', sha);
       if (s) floatingEditor.loadSession({ sha1: s.sha1, code: s.code, filename: s.filename });
     }
   }, 500);
