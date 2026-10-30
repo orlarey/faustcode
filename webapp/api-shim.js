@@ -301,6 +301,15 @@ async function handleDelete(sha) {
   return ok({ ok: true });
 }
 
+/** DELETE /api/sessions : every session (.dsp and .lib) goes. */
+async function handleDeleteAll() {
+  const all = listSessions();
+  for (const s of all) await deleteSession(s.sha1);
+  setActiveSha1(null);
+  bumpUpdatedAt();
+  return ok({ deleted: all.length });
+}
+
 function handleSessionFile(sha, file) {
   const sess = getSession(sha);
   if (!sess) return notFound();
@@ -448,7 +457,8 @@ async function route(req) {
   const method = (req.method || 'GET').toUpperCase();
 
   if (path === '/api/submit')      return method === 'POST' ? handleSubmit(req) : methodNotAllowed();
-  if (path === '/api/sessions')    return method === 'GET'  ? handleSessionsList(req.url) : methodNotAllowed();
+  if (path === '/api/sessions')    return method === 'GET'    ? handleSessionsList(req.url) :
+                                          method === 'DELETE' ? handleDeleteAll() : methodNotAllowed();
   if (path === '/api/state')       return method === 'GET'  ? handleStateGet() :
                                           method === 'POST' ? handleStatePost(req) : methodNotAllowed();
   if (path === '/api/version')     return method === 'GET'  ? handleVersion() : methodNotAllowed();

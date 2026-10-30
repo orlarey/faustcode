@@ -71,6 +71,12 @@ export function clearDraftsWithCode(code) {
   if (changed) persistSoon();
 }
 
+/** Forget every draft (all sessions were deleted). */
+export function clearAllDrafts() {
+  drafts = {};
+  persistNow();
+}
+
 /** Write pending changes right away (page about to be hidden / closed). */
 export function flushDrafts() {
   if (saveTimer) persistNow();

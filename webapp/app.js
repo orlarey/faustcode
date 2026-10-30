@@ -25,6 +25,7 @@ import {
 } from './play-gate.js';
 import { openShareDialog } from './share-ui.js';
 import { showNotice } from './notice.js';
+import { clearAllDrafts } from './drafts.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -307,8 +308,14 @@ function ensureSessionPicker() {
       />
     </div>
     <div class="session-picker-list"></div>
+    <div class="session-picker-footer">
+      <button type="button" class="session-picker-delete-all" title="Delete every session (.dsp and .lib)">Delete all sessions…</button>
+    </div>
   `;
   document.body.appendChild(picker);
+  picker.querySelector('.session-picker-delete-all').addEventListener('click', () => {
+    void deleteAllSessions();
+  });
   sessionPickerEl = picker;
   sessionPickerSearchInput = picker.querySelector('.session-picker-search');
   sessionPickerListEl = picker.querySelector('.session-picker-list');
@@ -360,6 +367,50 @@ function ensureSessionPicker() {
       closeSessionPicker();
       await loadSessionByIndex(index);
     });
+  }
+}
+
+// Other faustcode tabs of this browser share the stored sessions : after
+// « Delete all sessions » they reload, so they neither show nor write back
+// deleted sessions (or their drafts).
+const sessionsChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('faustcode') : null;
+if (sessionsChannel) {
+  sessionsChannel.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'sessions-cleared') {
+      clearAllDrafts();
+      location.reload();
+    }
+  });
+}
+
+/**
+ * Purpose: Delete every session after confirmation, then start from a blank patch.
+ * How: DELETE /api/sessions (all .dsp and .lib), drop all drafts, tell the
+ * other tabs, land on a fresh untitled.dsp as on first launch.
+ */
+async function deleteAllSessions() {
+  closeSessionPicker();
+  const count = state.sessions.length;
+  if (count === 0) return;
+  const plural = count === 1 ? 'session' : `${count} sessions`;
+  if (!window.confirm(`Delete all ${plural} (.dsp and .lib)?\nThis cannot be undone.`)) return;
+  showLoading();
+  try {
+    const response = await fetch('/api/sessions', { method: 'DELETE' });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || 'Delete all failed');
+    }
+    clearAllDrafts();
+    if (sessionsChannel) sessionsChannel.postMessage({ type: 'sessions-cleared' });
+    hideError();
+    await loadSessions();
+    await submitNewBlankPatch();
+    showNotice(`Deleted ${plural}.`);
+  } catch (err) {
+    showError(`Error: ${err.message}`);
+  } finally {
+    hideLoading();
   }
 }
 

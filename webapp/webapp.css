@@ -650,3 +650,26 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   height: 0.85rem;
   vertical-align: -0.12rem;
 }
+
+/* « Delete all sessions… » at the bottom of the session picker. */
+.session-picker-footer {
+  border-top: 1px solid rgba(147, 200, 220, 0.2);
+  padding: 0.35rem 0.45rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.session-picker-delete-all {
+  border: 1px solid rgba(255, 110, 110, 0.35);
+  background: transparent;
+  color: #ff9c9c;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  padding: 0.22rem 0.65rem;
+  cursor: pointer;
+}
+
+.session-picker-delete-all:hover {
+  background: rgba(255, 90, 90, 0.14);
+  color: #ffd0d0;
+}
