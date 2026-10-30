@@ -674,7 +674,8 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   color: #ffd0d0;
 }
 
-/* Output volume, left of the Run header (views/run.js). */
+/* Output volume + Audio On/Off (speaker icon), left of the Run header
+   (views/run.js). */
 .run-header-left {
   display: inline-flex;
   align-items: center;
@@ -705,3 +706,34 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+.run-audio-speaker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  padding: 0.1rem;
+  margin-left: -0.25rem;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--ui-text-pill);
+}
+
+.run-audio-speaker svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.run-audio-speaker.is-on { color: #6effc2; }
+.run-audio-speaker.is-off { color: #ff8f8f; }
+.run-audio-speaker.is-on .run-speaker-off,
+.run-audio-speaker.is-off .run-speaker-on { display: none; }
+
+.run-audio-speaker:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+.run-audio-speaker:focus-visible { box-shadow: var(--ui-focus-shadow); outline: none; }
+.run-audio-speaker:disabled { opacity: 0.45; cursor: default; }
+
+/* Audio off : the slider dims (it still sets the level for next time). */
+.run-volume:has(.run-audio-speaker.is-off) input[type="range"],
+.run-volume:has(.run-audio-speaker.is-off) .run-volume-value { opacity: 0.45; }

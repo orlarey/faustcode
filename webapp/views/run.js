@@ -283,18 +283,18 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
     <div class="run-header">
       <div class="run-header-left">
         <span class="run-note run-header-title">RUN</span>
-        <label class="run-volume" title="Output volume (does not affect Record)">
-          <span>Vol</span>
-          <input id="run-volume" type="range" min="0" max="100" step="1" aria-label="Output volume">
+        <div class="run-volume">
+          <button id="run-audio-toggle" class="run-audio-speaker is-off" type="button" aria-label="Audio on / off" aria-pressed="false">
+            <svg class="run-speaker-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19.5 5.5a9 9 0 0 1 0 13"/></svg>
+            <svg class="run-speaker-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>
+          </button>
+          <input id="run-volume" type="range" min="0" max="100" step="1" aria-label="Output volume" title="Output volume (does not affect Record)">
           <span id="run-volume-value" class="run-volume-value"></span>
-        </label>
+        </div>
       </div>
       <div class="run-midi-inline hidden" id="run-midi-inline"></div>
       <div class="run-header-controls">
-        <button id="run-audio-toggle" class="run-audio-toggle is-off" type="button" aria-label="Audio state" aria-pressed="false">
-          <span>Audio</span>
-          <span id="run-audio-toggle-value" class="run-audio-toggle-value">Off</span>
-        </button>
+
         <button id="run-record-toggle" class="run-record-toggle" type="button" disabled>
           <span class="run-record-dot">●</span> <span id="run-record-label">Rec</span>
         </button>
@@ -425,12 +425,14 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
    * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const setAudioToggleState = (isOn) => {
-    if (!audioToggleButton || !audioToggleValue) return;
+    if (!audioToggleButton) return;
     const safeIsOn = !!isOn;
     audioToggleButton.classList.toggle('is-on', safeIsOn);
     audioToggleButton.classList.toggle('is-off', !safeIsOn);
     audioToggleButton.setAttribute('aria-pressed', safeIsOn ? 'true' : 'false');
-    audioToggleValue.textContent = safeIsOn ? 'On' : 'Off';
+    // The speaker icon of the volume pill is the Audio On/Off button.
+    audioToggleButton.title = safeIsOn ? 'Audio on : click to turn off' : 'Audio off : click to turn on';
+    if (audioToggleValue) audioToggleValue.textContent = safeIsOn ? 'On' : 'Off';
   };
   /**
    * Purpose: Implement `setAudioToggleDisabled` in the Run view.
