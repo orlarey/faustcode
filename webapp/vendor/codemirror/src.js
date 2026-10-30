@@ -7,7 +7,7 @@
 //   cd webapp/vendor/codemirror && ./build-cm6.sh
 
 export { EditorState, Compartment } from '@codemirror/state';
-export { EditorView, keymap, lineNumbers, highlightActiveLine, hoverTooltip } from '@codemirror/view';
+export { EditorView, keymap, lineNumbers, highlightActiveLine, hoverTooltip, tooltips } from '@codemirror/view';
 export { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands';
 export {
   syntaxHighlighting,

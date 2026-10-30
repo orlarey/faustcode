@@ -8,7 +8,7 @@
 // libraries (/usr/share/faust), so they always match the compiler ;
 // primitives come from vendor/faust-primitives/primitives.lib.
 
-import { autocompletion, completionKeymap, hoverTooltip, keymap, EditorView } from './vendor/codemirror/cm6.js';
+import { autocompletion, completionKeymap, hoverTooltip, keymap, tooltips, EditorView } from './vendor/codemirror/cm6.js';
 import { collectDocs, parseDocBlocks, resolveDottedName, markdownToHtml, escapeHtml, compactDoc } from './faust-docs.js';
 import { getFaust } from './faust.js';
 
@@ -159,6 +159,7 @@ const docHover = hoverTooltip((view, pos) => {
 // the panel separately : nested backdrop filters would not see the code.
 const POPUP_BG = 'rgba(40, 44, 52, 0.86) !important';
 const POPUP_BLUR = 'blur(3px)';
+const POPUP_GAP_PX = 8;
 const docTheme = EditorView.theme({
   '.cm-tooltip.cm-tooltip-autocomplete': {
     background: 'transparent !important',
@@ -178,6 +179,13 @@ const docTheme = EditorView.theme({
     fontStyle: 'normal',
     opacity: '0.45',
     marginLeft: '0.8em',
+  },
+  // A gap between the line being edited and the list / hover doc.
+  '.cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-below, .cm-tooltip.cm-tooltip-hover.cm-tooltip-below': {
+    marginTop: `${POPUP_GAP_PX}px`,
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-above, .cm-tooltip.cm-tooltip-hover.cm-tooltip-above': {
+    marginTop: `-${POPUP_GAP_PX}px`,
   },
   '.cm-tooltip.cm-completionInfo, .cm-tooltip.cm-tooltip-hover': {
     background: POPUP_BG,
@@ -230,11 +238,31 @@ const keepRoomBelow = EditorView.scrollMargins.of(() => ({ bottom: BOTTOM_MARGIN
 const acceptBinding = completionKeymap.find((b) => b.key === 'Enter');
 const tabAccepts = keymap.of(acceptBinding ? [{ key: 'Tab', run: acceptBinding.run }] : []);
 
+// Popups live outside the editor : an ancestor with `overflow: hidden` +
+// `backdrop-filter` (the floating ✎ editor window) would otherwise clip
+// them, so a doc panel without room below or on the right side simply
+// vanished. From there, CodeMirror can move it up or to the other side
+// within the whole window. The host is a 0×0 fixed box : CodeMirror's
+// container carries the editor theme classes (height: 100%) and would
+// otherwise become a flex item of <body> and squeeze the page layout.
+function popupHost() {
+  let host = document.getElementById('cm-faust-popups');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'cm-faust-popups';
+    host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:200;';
+    document.body.appendChild(host);
+  }
+  return host;
+}
+const popupsOutside = typeof document !== 'undefined' ? tooltips({ parent: popupHost() }) : [];
+
 /** Editor extensions : completion (typing or Ctrl-Space) + hover docs. */
 export function faustCompletion() {
   // Start loading in the background so the first completion is instant.
   setTimeout(() => { void loadDocs(); }, 0);
   return [
+    popupsOutside,
     autocompletion({ override: [completionSource], icons: true }),
     tabAccepts,
     docHover,
