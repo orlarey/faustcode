@@ -1485,6 +1485,11 @@ async function downloadCurrentViewArtifact(format = '') {
 }
 
 // Event listeners
+// An editor's code is known to compile (submitted, or unchanged from the
+// stored version) : an error banner left by an earlier broken version of
+// it is obsolete.
+document.addEventListener('faustcode:code-ok', () => hideError());
+
 if (shareBtn) {
   shareBtn.addEventListener('click', async () => {
     const session = getCurrentSession();

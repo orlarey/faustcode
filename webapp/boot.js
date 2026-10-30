@@ -367,6 +367,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
       }
       throw new Error('compilation failed');
     }
+    document.dispatchEvent(new CustomEvent('faustcode:code-ok')); // clears a stale error
     // Activate the new session so the view under the floating editor
     // (Run / SVG / signals…) refreshes with the freshly-compiled DSP.
     await fetch('/api/state', {

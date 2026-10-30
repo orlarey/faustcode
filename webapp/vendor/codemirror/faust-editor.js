@@ -134,7 +134,13 @@ export function createFaustEditor({ doc, parent, onSubmit, onDirty }) {
   }
 
   async function submit() {
-    if (!dirty || typeof onSubmit !== 'function') return;
+    if (!dirty) {
+      // Unchanged = the stored version, which compiled : an error shown
+      // for an earlier, broken version of this text is obsolete.
+      if (typeof document !== 'undefined') document.dispatchEvent(new CustomEvent('faustcode:code-ok'));
+      return;
+    }
+    if (typeof onSubmit !== 'function') return;
     const code = view.state.doc.toString();
     if (!code.trim()) return;
     try {
