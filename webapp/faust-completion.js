@@ -9,7 +9,7 @@
 // primitives come from vendor/faust-primitives/primitives.lib.
 
 import { autocompletion, hoverTooltip, EditorView } from './vendor/codemirror/cm6.js';
-import { collectDocs, parseDocBlocks, resolveDottedName, markdownToHtml, escapeHtml } from './faust-docs.js';
+import { collectDocs, parseDocBlocks, resolveDottedName, markdownToHtml, escapeHtml, compactDoc } from './faust-docs.js';
 import { getFaust } from './faust.js';
 
 const KEYWORDS = [
@@ -70,7 +70,7 @@ function buildBaseOptions(all) {
       label: entry.key,
       type: KEYWORDS.includes(entry.key) ? 'keyword' : 'function',
       detail: entry.namespace ? entry.file : 'primitive',
-      info: () => renderDoc(entry),
+      info: () => renderDoc(entry, { compact: true }),
     });
   }
   for (const k of KEYWORDS) if (!byLabel.has(k)) byLabel.set(k, { label: k, type: 'keyword' });
@@ -123,13 +123,15 @@ async function completionSource(context) {
 // Doc rendering
 // ---------------------------------------------------------------------
 
-function renderDoc(entry) {
+/** compact : summary + Usage (completion panel) ; else the whole doc (hover). */
+function renderDoc(entry, { compact = false } = {}) {
   const dom = document.createElement('div');
-  dom.className = 'cm-faust-doc';
+  dom.className = compact ? 'cm-faust-doc cm-faust-doc-compact' : 'cm-faust-doc';
   const where = entry.namespace ? `${entry.file}` : 'Faust primitive';
+  const doc = compact ? compactDoc(entry.doc) : entry.doc;
   dom.innerHTML =
     `<div class="cm-faust-doc-title"><code>${escapeHtml(entry.key)}</code> <span>${escapeHtml(where)}</span></div>` +
-    markdownToHtml(entry.doc || '');
+    markdownToHtml(doc || '');
   return dom;
 }
 
@@ -146,15 +148,48 @@ const docHover = hoverTooltip((view, pos) => {
   return {
     pos: line.from + hit.from,
     end: line.from + hit.to,
-    above: true,
+    above: false, // below the word : the lines above stay readable
     create: () => ({ dom: renderDoc(entry) }),
   };
-}, { hoverTime: 400 });
+}, { hoverTime: 600 });
 
-const docTheme = EditorView.baseTheme({
+// Popups that hide as little code as possible : compact list (6 rows),
+// short doc panel, and a slightly see-through background (86 % + blur) so
+// the code underneath stays perceptible. The blur sits on the list and on
+// the panel separately : nested backdrop filters would not see the code.
+const POPUP_BG = 'rgba(40, 44, 52, 0.86) !important';
+const POPUP_BLUR = 'blur(3px)';
+const docTheme = EditorView.theme({
+  '.cm-tooltip.cm-tooltip-autocomplete': {
+    background: 'transparent !important',
+    border: 'none !important',
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+    fontSize: '12px',
+    maxHeight: '8.2em', // ≈ 6 rows
+    minWidth: '200px',
+    background: POPUP_BG,
+    backdropFilter: POPUP_BLUR,
+    WebkitBackdropFilter: POPUP_BLUR,
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: '4px',
+  },
+  '.cm-completionDetail': {
+    fontStyle: 'normal',
+    opacity: '0.45',
+    marginLeft: '0.8em',
+  },
+  '.cm-tooltip.cm-completionInfo, .cm-tooltip.cm-tooltip-hover': {
+    background: POPUP_BG,
+    backdropFilter: POPUP_BLUR,
+    WebkitBackdropFilter: POPUP_BLUR,
+    border: '1px solid rgba(255, 255, 255, 0.08) !important',
+    borderRadius: '4px',
+    padding: '0',
+  },
   '.cm-faust-doc': {
-    maxWidth: '520px',
-    maxHeight: '340px',
+    maxWidth: '480px',
+    maxHeight: '300px',
     overflow: 'auto',
     padding: '6px 10px',
     fontSize: '12px',
@@ -162,6 +197,7 @@ const docTheme = EditorView.baseTheme({
     fontFamily: 'system-ui, sans-serif',
     whiteSpace: 'normal',
   },
+  '.cm-faust-doc.cm-faust-doc-compact': { maxHeight: '180px' }, // ≈ 10 lines
   '.cm-faust-doc p': { margin: '4px 0' },
   '.cm-faust-doc ul': { margin: '4px 0', paddingLeft: '18px' },
   '.cm-faust-doc pre': {
@@ -177,8 +213,16 @@ const docTheme = EditorView.baseTheme({
   '.cm-faust-doc-title': { fontWeight: '600', marginBottom: '4px' },
   '.cm-faust-doc-title span': { fontWeight: '400', opacity: '0.6', marginLeft: '6px' },
   '.cm-faust-doc-h': { fontWeight: '600', marginTop: '6px', opacity: '0.85' },
-  '.cm-tooltip.cm-completionInfo': { padding: '0' },
+  // Room after the last line, so the line being typed can always sit
+  // above the bottom margin below.
+  '.cm-content': { paddingBottom: '200px' },
 });
+
+// Keep the cursor line at least this far above the editor's bottom edge
+// while typing : the completion list then always fits below the cursor
+// and never flips above it, over the code being read.
+const BOTTOM_MARGIN_PX = 170;
+const keepRoomBelow = EditorView.scrollMargins.of(() => ({ bottom: BOTTOM_MARGIN_PX }));
 
 /** Editor extensions : completion (typing or Ctrl-Space) + hover docs. */
 export function faustCompletion() {
@@ -188,5 +232,6 @@ export function faustCompletion() {
     autocompletion({ override: [completionSource], icons: true }),
     docHover,
     docTheme,
+    keepRoomBelow,
   ];
 }

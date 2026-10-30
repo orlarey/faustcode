@@ -158,6 +158,24 @@ export async function collectDocs(readLib, rootFile = 'stdfaust.lib', depth = 2,
   return out;
 }
 
+/**
+ * Short form of a doc for the completion panel : the text before the
+ * first heading (the summary) plus the « Usage » section (signature and
+ * parameters) ; Test, References… are left to the hover doc.
+ */
+export function compactDoc(doc) {
+  const out = [];
+  let keep = true;
+  let inFence = false;
+  for (const line of String(doc || '').split('\n')) {
+    if (/^\s*```/.test(line)) inFence = !inFence;
+    const heading = !inFence && /^\s*#+\s*(.*)$/.exec(line);
+    if (heading) keep = /^usage\b/i.test(heading[1].trim());
+    if (keep) out.push(line);
+  }
+  return out.join('\n').trim();
+}
+
 /** First sentence-ish line of a doc, for the completion list. */
 export function docSummary(doc) {
   let inFence = false;

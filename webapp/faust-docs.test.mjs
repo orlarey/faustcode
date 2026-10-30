@@ -7,6 +7,7 @@ import {
   parseLibraryRefs,
   collectDocs,
   docSummary,
+  compactDoc,
   resolveDottedName,
   markdownToHtml,
 } from './faust-docs.js';
@@ -98,4 +99,10 @@ test('markdownToHtml escapes and renders the doc subset', () => {
   assert.ok(html.includes('<pre>a &lt; b</pre>'));
   assert.ok(html.includes('<li><code>freq</code>: Hz</li>'));
   assert.ok(html.includes('<p>link</p>'));
+});
+
+test('compactDoc keeps the summary and the Usage section only', () => {
+  const doc = 'Sine oscillator.\n\n#### Usage\n\n```\n# not a heading\nosc(f) : _\n```\n\nWhere:\n\n* `f`: Hz\n\n#### Test\n```\nx = osc(1);\n```\n#### References\n* somewhere';
+  assert.equal(compactDoc(doc), 'Sine oscillator.\n\n#### Usage\n\n```\n# not a heading\nosc(f) : _\n```\n\nWhere:\n\n* `f`: Hz');
+  assert.equal(compactDoc('Just a summary.'), 'Just a summary.');
 });
