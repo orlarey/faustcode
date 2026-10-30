@@ -8,7 +8,7 @@
 // libraries (/usr/share/faust), so they always match the compiler ;
 // primitives come from vendor/faust-primitives/primitives.lib.
 
-import { autocompletion, hoverTooltip, EditorView } from './vendor/codemirror/cm6.js';
+import { autocompletion, completionKeymap, hoverTooltip, keymap, EditorView } from './vendor/codemirror/cm6.js';
 import { collectDocs, parseDocBlocks, resolveDottedName, markdownToHtml, escapeHtml, compactDoc } from './faust-docs.js';
 import { getFaust } from './faust.js';
 
@@ -224,12 +224,19 @@ const docTheme = EditorView.theme({
 const BOTTOM_MARGIN_PX = 170;
 const keepRoomBelow = EditorView.scrollMargins.of(() => ({ bottom: BOTTOM_MARGIN_PX }));
 
+// Tab accepts the highlighted completion, like Enter (and as in FaustIDE /
+// VS Code). Reuses the Enter binding's command ; when no list is open it
+// returns false and Tab keeps indenting (indentWithTab, later keymap).
+const acceptBinding = completionKeymap.find((b) => b.key === 'Enter');
+const tabAccepts = keymap.of(acceptBinding ? [{ key: 'Tab', run: acceptBinding.run }] : []);
+
 /** Editor extensions : completion (typing or Ctrl-Space) + hover docs. */
 export function faustCompletion() {
   // Start loading in the background so the first completion is instant.
   setTimeout(() => { void loadDocs(); }, 0);
   return [
     autocompletion({ override: [completionSource], icons: true }),
+    tabAccepts,
     docHover,
     docTheme,
     keepRoomBelow,
