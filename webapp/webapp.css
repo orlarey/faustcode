@@ -673,3 +673,35 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   background: rgba(255, 90, 90, 0.14);
   color: #ffd0d0;
 }
+
+/* Output volume, left of the Run header (views/run.js). */
+.run-header-left {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  justify-self: start;
+}
+
+.run-volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  color: var(--ui-text-pill);
+  border: 1px solid var(--ui-accent-border-strong);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  background: var(--ui-pill-bg);
+}
+
+.run-volume input[type="range"] {
+  width: 110px;
+  accent-color: #6effc2;
+  cursor: pointer;
+}
+
+.run-volume-value {
+  min-width: 2.6em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

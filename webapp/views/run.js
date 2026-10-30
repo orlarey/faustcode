@@ -51,6 +51,31 @@ let audioRunning = false;
 // mounted view's refresh hook so module-level audio code can update it.
 let runRecorder = null;
 let recordUi = null;
+// Output volume, 0..100 (%), applied to the gain before the speakers ;
+// remembered across sessions and reloads. Record taps the DSP before it.
+let outputVolume = loadOutputVolume();
+
+function loadOutputVolume() {
+  try {
+    const v = Number(localStorage.getItem('faustcode-volume'));
+    if (Number.isFinite(v) && v >= 0 && v <= 100 && localStorage.getItem('faustcode-volume') !== null) return v;
+  } catch { /* ignore */ }
+  return 100;
+}
+
+/** Perceptual curve : gain = (v / 100)^2 (≈ -12 dB at 50 %). */
+function volumeGain(v) {
+  const x = Math.max(0, Math.min(100, v)) / 100;
+  return x * x;
+}
+
+function setOutputVolume(v) {
+  outputVolume = Math.max(0, Math.min(100, Math.round(v)));
+  try { localStorage.setItem('faustcode-volume', String(outputVolume)); } catch { /* ignore */ }
+  if (outputNode && outputNode.gain && audioContext) {
+    outputNode.gain.setTargetAtTime(volumeGain(outputVolume), audioContext.currentTime, 0.02);
+  }
+}
 // AudioContext created inside the audio gate's tap (iOS only lets a
 // context start from a user gesture) and adopted by the next startAudio.
 let primedAudioContext = null;
@@ -256,7 +281,14 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
 
   runRoot.innerHTML = `
     <div class="run-header">
-      <span class="run-note run-header-title">RUN</span>
+      <div class="run-header-left">
+        <span class="run-note run-header-title">RUN</span>
+        <label class="run-volume" title="Output volume (does not affect Record)">
+          <span>Vol</span>
+          <input id="run-volume" type="range" min="0" max="100" step="1" aria-label="Output volume">
+          <span id="run-volume-value" class="run-volume-value"></span>
+        </label>
+      </div>
       <div class="run-midi-inline hidden" id="run-midi-inline"></div>
       <div class="run-header-controls">
         <button id="run-audio-toggle" class="run-audio-toggle is-off" type="button" aria-label="Audio state" aria-pressed="false">
@@ -758,6 +790,16 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
     } else {
       await startAudio();
     }
+  });
+
+  const volumeInput = runRoot.querySelector('#run-volume');
+  const volumeValue = runRoot.querySelector('#run-volume-value');
+  const showVolume = () => { volumeValue.textContent = `${outputVolume}%`; };
+  volumeInput.value = String(outputVolume);
+  showVolume();
+  volumeInput.addEventListener('input', () => {
+    setOutputVolume(Number(volumeInput.value));
+    showVolume();
   });
 
   // Record button : Idle → Armed (waits for sound) → Recording → file.
@@ -3871,6 +3913,7 @@ function setupScope(context, node, scope) {
 
   node.connect(analyserNode);
   const gain = context.createGain();
+  gain.gain.value = volumeGain(outputVolume);
   analyserNode.connect(gain);
 
   const buffer = new Float32Array(analyserNode.fftSize);
