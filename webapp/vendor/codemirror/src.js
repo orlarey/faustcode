@@ -7,7 +7,7 @@
 //   cd webapp/vendor/codemirror && ./build-cm6.sh
 
 export { EditorState, Compartment } from '@codemirror/state';
-export { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
+export { EditorView, keymap, lineNumbers, highlightActiveLine, hoverTooltip } from '@codemirror/view';
 export { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands';
 export {
   syntaxHighlighting,
@@ -17,6 +17,11 @@ export {
   bracketMatching,
   indentOnInput,
 } from '@codemirror/language';
-export { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+export {
+  closeBrackets,
+  closeBracketsKeymap,
+  autocompletion,
+  completionKeymap,
+} from '@codemirror/autocomplete';
 export { tags } from '@lezer/highlight';
 export { oneDark } from '@codemirror/theme-one-dark';

@@ -6,7 +6,8 @@
 //
 // Centralises the CodeMirror extension set so both editors stay in
 // sync : same language mode, same theme, same Cmd/Ctrl+S behaviour,
-// same dirty tracking.
+// same dirty tracking, same library completion + hover docs
+// (faust-completion.js).
 //
 // When `window.__faustEditorBus` is present (the standalone webapp
 // installs one), every editor created here automatically joins a
@@ -32,6 +33,7 @@ import {
   oneDark,
 } from './cm6.js';
 import { faustLanguage } from './faust-lang.js';
+import { faustCompletion } from '../../faust-completion.js';
 
 const BASE_FONT_PX = 14;
 const FONT_FAMILY = "'SF Mono', 'Monaco', 'Consolas', monospace";
@@ -158,6 +160,7 @@ export function createFaustEditor({ doc, parent, onSubmit, onDirty }) {
     closeBrackets(),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     faustLanguage,
+    faustCompletion(),
     oneDark,
     keymap.of([
       {
