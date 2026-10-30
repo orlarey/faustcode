@@ -263,7 +263,10 @@ export function faustCompletion() {
   setTimeout(() => { void loadDocs(); }, 0);
   return [
     popupsOutside,
-    autocompletion({ override: [completionSource], icons: true }),
+    // interactionDelay 0 : CodeMirror otherwise refuses to accept within
+    // 75 ms of a list update, and a Tab typed right after the last letter
+    // fell through to indentWithTab (the line got indented).
+    autocompletion({ override: [completionSource], icons: true, interactionDelay: 0 }),
     tabAccepts,
     docHover,
     docTheme,
