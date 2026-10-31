@@ -40,6 +40,7 @@ import {
 } from './sessions.js';
 import { getFaust } from './faust.js';
 import { injectLibsIntoFs, isLibFilename, LIB_INCLUDE_ARG } from './lib-inject.js';
+import { announceSubmit } from './playground-link.js';
 
 // ---------------------------------------------------------------------
 // Shared in-memory state (mirrors the Docker /api/state model).
@@ -255,7 +256,9 @@ async function handleSubmit(init) {
   const code = typeof parsed.code === 'string' ? parsed.code : '';
   if (!code) return fail('Missing or empty code', 400);
   try {
+    const previous = getActiveSha1();
     const { sha1, errors } = await compileAndStore(code, parsed.filename || 'patch.dsp');
+    announceSubmit({ sha1, previous, code, filename: parsed.filename || 'patch.dsp', errors });
     return ok({ sha1, errors });
   } catch (err) {
     return fail(String(err && err.message ? err.message : err));
@@ -434,7 +437,7 @@ async function handleVersion() {
 }
 
 function handleAppVersion() {
-  return ok({ version: '0.12.10' });
+  return ok({ version: '0.13.0' });
 }
 
 function handleFaustHelp() {

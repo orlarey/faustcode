@@ -114,7 +114,7 @@ click **Connect** in the side drawer to take the seat back.
 
 ### URL parameters
 
-The webapp recognises two query strings :
+The webapp recognises these query strings :
 
 - `?mcp=ws://127.0.0.1:7777/ws` — auto-connect to the bridge without
   needing the user to click Connect. Handy for automated browsers,
@@ -122,6 +122,28 @@ The webapp recognises two query strings :
 - `?token=<shared-secret>` — sent in the `WsReady.token` field of the
   handshake (SC-4). The bridge must have been launched with the same
   `--token` flag, otherwise the connection is rejected.
+- `?code=…&name=…&view=…&poly=…` — open a shared DSP (cf.
+  `spec_share_url.md`).
+- `?link=playground` — this window edits the modules of the
+  [FaustPlayground](https://github.com/orlarey/faustplayground-extended)
+  page that opened it (see below).
+
+## Edit FaustPlayground modules
+
+The pencil of a FaustPlayground module opens faustcode in a window
+reused for all the modules (`?link=playground`). The module's code
+becomes a session, shown in the dsp view once ENTER is clicked. Each
+save of that session that compiles (`Cmd/Ctrl-S` in the dsp view or the
+floating editor, or an MCP `submit` while it is active) is sent back to
+the playground, which recompiles the module in place : the sound goes
+on, the slider values and the connections are kept. A code with errors
+stays in faustcode, with its errors ; the module keeps playing its last
+valid version.
+
+The two pages talk with `postMessage` (they may have different
+origins) ; faustcode only accepts messages from the window that opened
+it. Protocol and behaviour : `spec_playground_link.md` and
+`webapp/playground-link.js`.
 
 ## What's inside
 

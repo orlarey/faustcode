@@ -59,18 +59,9 @@ export function chooseTarget(replies) {
 export async function tryHandOff(shared) {
   const ch = getChannel();
   if (!ch) return { outcome: 'none' };
-  const requestId = randomId();
-  const replies = [];
-  const onProbeReply = (e) => {
-    const m = e.data || {};
-    if (m.type === 'here' && m.requestId === requestId && m.tabId !== tabId) replies.push(m);
-  };
-  ch.addEventListener('message', onProbeReply);
-  ch.postMessage({ type: 'probe', requestId });
-  await sleep(PROBE_TIMEOUT_MS);
-  ch.removeEventListener('message', onProbeReply);
-
+  const replies = await probeTabs();
   const target = chooseTarget(replies);
+  const requestId = randomId();
   if (!target) return { outcome: 'none' };
 
   const ack = await new Promise((resolve) => {
@@ -95,6 +86,27 @@ export async function tryHandOff(shared) {
   });
   if (ack && ack.ok) return { outcome: 'handed', target, sha1: ack.sha1 };
   return { outcome: 'failed', target, error: ack ? ack.error : 'timeout' };
+}
+
+/**
+ * The other faustcode tabs of this browser (their `here` replies), e.g.
+ * to know whether one may hold the MCP bridge.
+ * @returns {Promise<Array<{tabId, audioUnlocked, mcpConnected, lastActiveAt}>>}
+ */
+export async function probeTabs() {
+  const ch = getChannel();
+  if (!ch) return [];
+  const requestId = randomId();
+  const replies = [];
+  const onProbeReply = (e) => {
+    const m = e.data || {};
+    if (m.type === 'here' && m.requestId === requestId && m.tabId !== tabId) replies.push(m);
+  };
+  ch.addEventListener('message', onProbeReply);
+  ch.postMessage({ type: 'probe', requestId });
+  await sleep(PROBE_TIMEOUT_MS);
+  ch.removeEventListener('message', onProbeReply);
+  return replies;
 }
 
 /**

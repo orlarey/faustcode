@@ -36,13 +36,14 @@ import {
   stripShareParams,
   setShareIntent,
 } from './share-link.js';
-import { tryHandOff, installHandoffResponder } from './tab-handoff.js';
+import { tryHandOff, installHandoffResponder, probeTabs } from './tab-handoff.js';
+import { installPlaygroundLink, isPlaygroundLink } from './playground-link.js';
 import { showNotice } from './notice.js';
 // Install the live mirror bus on window.__faustEditorBus before any
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
 
-const WEBAPP_VERSION = '0.12.10';
+const WEBAPP_VERSION = '0.13.0';
 
 // 1. Synchronously install the fetch shim BEFORE any view code runs.
 installApiShim();
@@ -275,6 +276,10 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
       }
     }
   }
+  // Opened by FaustPlayground to edit its modules (playground-link.js) :
+  // like a shared link, do not take the MCP bridge from a faustcode tab
+  // already open.
+  if (isPlaygroundLink(location.search) && (await probeTabs()).length > 0) mcpAutoConnect = false;
   if (SHARE_PARAMS.some((p) => bootParams.has(p))) {
     history.replaceState(history.state, '', stripShareParams(location.href));
   }
@@ -404,6 +409,27 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
   installHandoffResponder({
     getStatus: () => ({ audioUnlocked: isAudioUnlocked(), mcpConnected: mcpReady }),
     onOpen: openSharedFromOtherTab,
+  });
+
+  // Editor of FaustPlayground modules (?link=playground) : the module's
+  // code becomes a session, shown in the dsp view ; each successful save
+  // of it is sent back to the playground.
+  installPlaygroundLink({
+    submit: async (code, filename) => {
+      const sub = await dispatch({ id: `playground-submit-${Date.now()}`, op: 'submit', args: { code, filename } });
+      if (!sub.ok) throw new Error(sub.error.message);
+      return sub.result;
+    },
+    show: async (sha1) => {
+      if (!isAudioUnlocked()) {
+        // the audio gate's ENTER lands on it
+        setShareIntent({ sha1, view: 'dsp', poly: 0 });
+      } else {
+        await dispatch({ id: `playground-view-${Date.now()}`, op: 'set_view', args: { view: 'dsp' } });
+      }
+    },
+    notify: showNotice,
+    log: appendLog,
   });
 
   const params = new URLSearchParams(location.search);
