@@ -43,7 +43,7 @@ import { showNotice } from './notice.js';
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
 
-const WEBAPP_VERSION = '0.13.2';
+const WEBAPP_VERSION = '0.14.0';
 
 // 1. Synchronously install the fetch shim BEFORE any view code runs.
 installApiShim();
@@ -430,6 +430,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     },
     notify: showNotice,
     log: appendLog,
+    libfaust: async () => (await getFaust()).version,
   });
 
   const params = new URLSearchParams(location.search);

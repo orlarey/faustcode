@@ -8,7 +8,8 @@
 // different origins : they talk with postMessage. Every message carries
 // `type` and `protocol` (LINK_PROTOCOL) :
 //
-//   faustcode → playground   faustcode-link-ready   { }                 ready to edit
+//   faustcode → playground   faustcode-link-ready   { libfaust? }       ready to edit (libfaust : version
+//                                                                        of its compiler, compared by the playground)
 //   playground → faustcode   faustcode-link-edit    { id, name, code }  edit this code
 //   faustcode → playground   faustcode-link-code    { id, code }        compiled new code
 //   playground → faustcode   faustcode-link-result  { id, ok, error? }  applied or not
@@ -126,7 +127,7 @@ export class LinkTable {
  * }} hooks
  * @returns {LinkTable | null}
  */
-export function installPlaygroundLink({ submit, show, notify, log = () => {} }) {
+export function installPlaygroundLink({ submit, show, notify, log = () => {}, libfaust }) {
   if (typeof window === 'undefined' || !isPlaygroundLink(location.search) || !window.opener) return null;
   const opener = window.opener;
   const table = new LinkTable();
@@ -196,7 +197,12 @@ export function installPlaygroundLink({ submit, show, notify, log = () => {} }) 
 
   // The playground answers with the code to edit (to any opener : this
   // message carries nothing).
-  opener.postMessage({ type: 'faustcode-link-ready', protocol: LINK_PROTOCOL }, '*');
-  log('info', 'playground link : ready');
+  // (its version of libfaust : the playground warns when it differs from its own)
+  Promise.resolve(typeof libfaust === 'function' ? libfaust() : undefined).catch(() => undefined).then((version) => {
+    const ready = { type: 'faustcode-link-ready', protocol: LINK_PROTOCOL };
+    if (typeof version === 'string') ready.libfaust = version;
+    opener.postMessage(ready, '*');
+    log('info', `playground link : ready${version ? ` (libfaust ${version})` : ''}`);
+  });
   return table;
 }

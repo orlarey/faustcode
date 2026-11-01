@@ -21,7 +21,7 @@ export async function render(container, { sha, sessionFilename, onError, onClear
     sha,
     sessionFilename,
     dotFile: 'signals.dot',
-    notAvailableMessage: 'Signals graph not available',
+    notAvailableMessage: 'Signals graph not available (libfaust 2.88 to 2.90 cannot draw it for recursive programs)',
     title: 'SIGNAL GRAPH',
     classPrefix: 'signals',
     zoomAriaLabel: 'Signal graph zoom',

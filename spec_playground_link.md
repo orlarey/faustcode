@@ -32,7 +32,7 @@ Le playground ouvre faustcode avec `?link=playground` dans une fenêtre nommée 
 
 | Sens | `type` | Champs | Rôle |
 | :-- | :-- | :-- | :-- |
-| faustcode → playground | `faustcode-link-ready` | — | prêt à éditer |
+| faustcode → playground | `faustcode-link-ready` | `libfaust?` | prêt à éditer ; version de libfaust de faustcode (faustcode 0.14.0), comparée par le playground |
 | playground → faustcode | `faustcode-link-edit` | `id`, `name`, `code` | éditer ce code |
 | faustcode → playground | `faustcode-link-code` | `id`, `code` | nouveau code, compilé sans erreur |
 | playground → faustcode | `faustcode-link-result` | `id`, `ok`, `error?` | code appliqué ou non |

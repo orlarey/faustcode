@@ -208,6 +208,24 @@ Runs `npx esbuild` inside a transient build directory ; no
 `node_modules` is committed. The resulting `cm6.js` (~290 KB) lives
 in `webapp/vendor/codemirror/`.
 
+### Faust compiler and libraries
+
+faustcode and faustmodular embed the **same** libfaust and Faust libraries (`stdfaust.lib`...): a module
+edited here must compile and sound the same there. Both use `@grame/faustwasm` 0.19.6 (libfaust 2.90.19),
+copied here from the npm package:
+
+```sh
+npm pack @grame/faustwasm@0.19.6 && tar xzf grame-faustwasm-0.19.6.tgz
+cp package/dist/esm/index.js webapp/faustwasm/index.js
+cp package/dist/esm/index.js webapp/vendor/faustwasm/index.js
+cp package/libfaust-wasm/libfaust-wasm.{js,data,wasm} webapp/libfaust-wasm/
+```
+
+Update both applications together. When faustcode is opened by faustmodular, its ready message carries
+its version of libfaust, and faustmodular warns if it differs from its own. Known issue of libfaust
+2.88.0 to 2.90.19: the signals view (`-sg`) fails on an assertion (`sigtyperules.cpp:209`) for any
+recursive program; the other views are not affected.
+
 ## Troubleshooting
 
 - **macOS : `killed: 9`** — Gatekeeper rejected the binary, usually
