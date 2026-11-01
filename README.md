@@ -37,7 +37,10 @@ don't have to fight Chrome's ES module cache while iterating.
   - **run** — audio engine with the classic Faust UI on the left, an
     orbit-style knob layout on the right, polyphony / MIDI / download
     selectors, and an oscilloscope + spectrum analyser at the bottom
-  - **signals** / **tasks** — DOT representations of the compiled graphs
+
+  (The **signals** and **tasks** views, DOT graphs of the compiled program,
+  were removed in 0.14.0: of little use to most users, and libfaust 2.88 to
+  2.90 cannot draw the signals graph of recursive programs.)
 - **✎** in the header toggles a floating CodeMirror overlay : drag the
   title bar to move, drag the bottom-right corner to resize, position and
   size persist across reloads. The overlay mirrors the dsp-view editor
@@ -222,9 +225,9 @@ cp package/libfaust-wasm/libfaust-wasm.{js,data,wasm} webapp/libfaust-wasm/
 ```
 
 Update both applications together. When faustcode is opened by faustmodular, its ready message carries
-its version of libfaust, and faustmodular warns if it differs from its own. Known issue of libfaust
-2.88.0 to 2.90.19: the signals view (`-sg`) fails on an assertion (`sigtyperules.cpp:209`) for any
-recursive program; the other views are not affected.
+its version of libfaust, and faustmodular warns if it differs from its own. (Known issue of libfaust
+2.88.0 to 2.90.19, reproduced with `process = _ : + ~ *(0.5);`: `-sg` fails on an assertion in
+`sigtyperules.cpp:209` for any recursive program. faustcode no longer uses `-sg`.)
 
 ## Troubleshooting
 

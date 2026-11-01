@@ -169,7 +169,8 @@ let _activeSha1 = null;
 let _activeView = 'dsp';
 let _lastMcpUrl = '';
 let _sessionOrder = 'chronological';
-const VALID_VIEWS = new Set(['dsp', 'svg', 'run', 'signals', 'tasks']);
+// The signals and tasks views were removed in 0.14.0 (a saved preference for them falls back to the default).
+const VALID_VIEWS = new Set(['dsp', 'svg', 'run']);
 const VALID_ORDERS = new Set(['chronological', 'usage']);
 
 export function getActiveSha1() {

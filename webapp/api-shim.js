@@ -11,8 +11,6 @@
 //   GET  /api/{sha}/errors.log             → compile errors text
 //   GET  /api/{sha}/svg                    → { files: string[] }
 //   GET  /api/{sha}/svg/{filename}         → SVG text
-//   GET  /api/{sha}/signals.dot            → DOT text
-//   GET  /api/{sha}/tasks.dot              → DOT text
 //   GET  /api/{sha}/generated.cpp          → 404 (out of scope)
 //   GET  /api/{sha}/metadata.json          → { cpp_flags, ... }
 //   POST /api/{sha}/refresh                → recompile session (static)
@@ -190,16 +188,6 @@ async function compileAndStore(code, filename) {
       svg = {};
       for (const f of files) svg[f] = tryReadFile(fs, `/${name}-svg/${f}`);
     }
-    try {
-      if (compiler.generateAuxFiles(name, code, `-lang wasm -o binary -sg ${LIB_INCLUDE_ARG}`)) {
-        signalsDot = tryReadFile(fs, `/${name}-sig.dot`);
-      }
-    } catch {}
-    try {
-      if (compiler.generateAuxFiles(name, code, `-lang wasm -o binary -vec -tg ${LIB_INCLUDE_ARG}`)) {
-        tasksDot = tryReadFile(fs, `/${name}.dot`);
-      }
-    } catch {}
   }
 
   if (errors === '') {

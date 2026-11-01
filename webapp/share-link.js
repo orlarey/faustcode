@@ -12,7 +12,7 @@
 
 export const PUBLIC_BASE_URL = 'https://orlarey.github.io/faustcode/';
 export const SHARE_PARAMS = ['code', 'name', 'view', 'poly'];
-export const SHARE_VIEWS = ['run', 'dsp', 'svg', 'signals', 'tasks'];
+export const SHARE_VIEWS = ['run', 'dsp', 'svg'];
 export const SHARE_POLY = [0, 1, 2, 4, 8, 16, 32, 64];
 export const DEFAULT_SHARE_NAME = 'shared.dsp';
 

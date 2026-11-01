@@ -252,18 +252,6 @@ async function compileSubmission(args) {
       svg = {};
       for (const f of files) svg[f] = tryReadFile(fs, `/${name}-svg/${f}`);
     }
-    // signals.dot — output is written to /<name>-sig.dot (cf. POC).
-    try {
-      if (compiler.generateAuxFiles(name, code, `-lang wasm -o binary -sg ${LIB_INCLUDE_ARG}`)) {
-        signalsDot = tryReadFile(fs, `/${name}-sig.dot`);
-      }
-    } catch {}
-    // tasks.dot — output is written to /<name>.dot.
-    try {
-      if (compiler.generateAuxFiles(name, code, `-lang wasm -o binary -vec -tg ${LIB_INCLUDE_ARG}`)) {
-        tasksDot = tryReadFile(fs, `/${name}.dot`);
-      }
-    } catch {}
   }
 
   const compiledOk = errors === '';
@@ -465,14 +453,9 @@ async function get_view_content() {
       if (!name) throw new Error('SVG not found');
       return { view: 'svg', mime: 'image/svg+xml', content: session.svg[name] };
     }
-    case 'signals': {
-      if (!session.signalsDot) throw new Error('signals.dot not available');
-      return { view: 'signals', mime: 'text/vnd.graphviz', content: session.signalsDot };
-    }
-    case 'tasks': {
-      if (!session.tasksDot) throw new Error('tasks.dot not available');
-      return { view: 'tasks', mime: 'text/vnd.graphviz', content: session.tasksDot };
-    }
+    case 'signals':
+    case 'tasks':
+      throw new Error(`the ${view} view was removed in faustcode 0.14.0`);
     case 'run': {
       // tools.json says : "For view=run, returns the latest spectrum
       // summary." Delegate to the same cache get_spectrum reads.

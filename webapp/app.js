@@ -94,7 +94,7 @@ function logAppPerf(stage, startMs = null, details = '') {
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
 async function loadViews() {
-  const viewModules = ['dsp', 'svg', 'run', 'tasks', 'signals'];
+  const viewModules = ['dsp', 'svg', 'run'];
 
   for (const viewName of viewModules) {
     try {
@@ -1526,13 +1526,7 @@ async function downloadCurrentViewArtifact(format = '') {
   let url = `/api/${session.sha1}/download/dsp`;
   let filename = `${base}.dsp`;
 
-  if (state.currentView === 'signals') {
-    url = `/api/${session.sha1}/download/signals`;
-    filename = `${base}-sig.dot`;
-  } else if (state.currentView === 'tasks') {
-    url = `/api/${session.sha1}/download/tasks`;
-    filename = `${base}.dsp.dot`;
-  } else if (state.currentView === 'svg') {
+  if (state.currentView === 'svg') {
     url = `/api/${session.sha1}/download/svg`;
     filename = `${base}-svg.tar.gz`;
   } else if (state.currentView === 'run') {

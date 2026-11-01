@@ -1,5 +1,5 @@
 {
-  "contractVersion": "0.10.0",
+  "contractVersion": "0.11.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
     "Sha1": {
@@ -9,7 +9,7 @@
     },
     "View": {
       "type": "string",
-      "enum": ["dsp", "svg", "run", "signals", "tasks"],
+      "enum": ["dsp", "svg", "run"],
       "description": "Active view. C++ code generation is out of scope in faustcode."
     },
     "SessionMeta": {

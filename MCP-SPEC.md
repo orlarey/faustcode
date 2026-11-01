@@ -110,7 +110,7 @@ cosmétique / non pertinent côté IA.
 
 | Action humaine | Tool MCP | État |
 |---|---|---|
-| Voir le graphe DOT rendu | `get_view_content` (view=tasks ou signals) | ✓ |
+| ~~Voir le graphe DOT rendu~~ | vues tasks et signals retirées en 0.14.0 (contrat 0.11.0) | — |
 | Split view / zoom du graphe | — | n/a UI |
 | Télécharger le .dot | — | ✗ |
 
