@@ -50,6 +50,17 @@ test('follows the sessions saved from a linked session', () => {
   assert.deepEqual(t.follow('s2', 's2'), { id: 'm1', name: 'Echo' });
 });
 
+test('follows the session shown in the editor when another one is active', () => {
+  const t = new LinkTable();
+  t.link('s0', { id: 'm1', name: 'Echo' });
+  // the showcase became active, but the editor still showed s0 : saved from s0
+  assert.deepEqual(t.follow('showcase', 's1', 's0'), { id: 'm1', name: 'Echo' });
+  assert.equal(t.get('s1').id, 'm1');
+  // the edited session wins over the active one
+  t.link('b0', { id: 'm2', name: 'Osc' });
+  assert.equal(t.follow('s1', 'x', 'b0').id, 'm2');
+});
+
 test('keeps several modules apart, and forgets a removed one', () => {
   const t = new LinkTable();
   t.link('a0', { id: 'm1', name: 'Echo' });

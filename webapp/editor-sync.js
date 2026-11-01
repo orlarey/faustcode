@@ -44,6 +44,11 @@ class FaustEditorBus {
    * Called on session navigation and when the DSP view mounts. `sha`
    * defaults to the session already loaded.
    */
+  /** The session whose code the editors show (null if none). */
+  get sha() {
+    return this._sha;
+  }
+
   loadSession(code, sha = this._sha) {
     const text = typeof code === 'string' ? code : '';
     this._pristine = text;

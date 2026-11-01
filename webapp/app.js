@@ -1237,9 +1237,17 @@ async function startShowcasePreview() {
 
   try {
     const showcaseSha = await submitShowcaseSession();
+    // ENTER clicked while the showcase was being compiled : the session the
+    // user landed on (a shared link, a faustmodular module…) wins. Compiling
+    // the showcase made it the active session : give the landing one back.
+    if (!state.showcase.active || state.audioUnlocked) {
+      if (state.currentSha && state.currentSha !== showcaseSha) await syncState({ sha1: state.currentSha });
+      return;
+    }
     state.showcase.sha = showcaseSha;
     state.currentSha = showcaseSha;
     await loadSessions();
+    if (!state.showcase.active || state.audioUnlocked) return;
     refreshSessionIndex();
     updateSessionNavigation();
     showInterface();
@@ -1944,6 +1952,9 @@ async function landOnEntrySession() {
   const share = takeShareIntent();
   if (share && share.sha1) {
     state.preBootActiveSha = null;
+    // the session may have been created after the list was loaded (a link
+    // from faustmodular arriving during the boot) : reload it then
+    if (!state.sessions.some((s) => s.sha1 === share.sha1)) await loadSessions();
     const idx = state.sessions.findIndex((s) => s.sha1 === share.sha1);
     if (idx >= 0) {
       state.currentView = share.view;
@@ -2203,8 +2214,9 @@ async function init() {
   state.audioUnlocked = false;
   await startShowcasePreview();
 
-  // Require explicit audio unlock per opened tab.
-  syncState({ audioUnlocked: false });
+  // Require explicit audio unlock per opened tab (unless ENTER was already
+  // clicked while the showcase was being prepared).
+  syncState({ audioUnlocked: state.audioUnlocked });
 
   // Load Faust compiler version for footer.
   if (footerVersion) {

@@ -39,8 +39,9 @@ export function isPlaygroundLink(search) {
 
 /**
  * Every compilation of a session (shim /api/submit and MCP submit) is
- * announced with the sha1 that was active before it.
- * @param {{ sha1, previous, code, filename, errors }} detail
+ * announced with the sha1 that was active before it and, for a save from an
+ * editor, the sha1 of the session the editor showed (`edited`).
+ * @param {{ sha1, previous, edited?, code, filename, errors }} detail
  */
 export function announceSubmit(detail) {
   if (typeof document === 'undefined') return;
@@ -86,12 +87,13 @@ export class LinkTable {
   }
 
   /**
-   * A session was saved while `previous` was active : when `previous` is
-   * linked, the new session is linked to the same module. Returns that
-   * module, or null.
+   * A session was saved while `previous` was active, from an editor showing
+   * `edited` : when one of them is linked (the edited session first, it is
+   * the one whose code was changed), the new session is linked to the same
+   * module. Returns that module, or null.
    */
-  follow(previous, sha1) {
-    const module = previous ? this.get(previous) : null;
+  follow(previous, sha1, edited = null) {
+    const module = (edited ? this.get(edited) : null) || (previous ? this.get(previous) : null);
     if (module && sha1) this.bySha.set(sha1, module);
     return module;
   }
@@ -184,8 +186,8 @@ export function installPlaygroundLink({ submit, show, notify, log = () => {} }) 
 
   document.addEventListener(SUBMITTED_EVENT, (event) => {
     if (explicit) return;
-    const { sha1, previous, code, errors } = event.detail || {};
-    const module = table.follow(previous, sha1);
+    const { sha1, previous, edited, code, errors } = event.detail || {};
+    const module = table.follow(previous, sha1, edited);
     if (!module || (errors && String(errors).trim())) return;
     if (!post({ type: 'faustcode-link-code', id: module.id, code })) {
       notify('faustmodular is closed : the module was not updated', 8000);

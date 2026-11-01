@@ -257,8 +257,9 @@ async function handleSubmit(init) {
   if (!code) return fail('Missing or empty code', 400);
   try {
     const previous = getActiveSha1();
+    const edited = globalThis.__faustEditorBus ? globalThis.__faustEditorBus.sha : null;
     const { sha1, errors } = await compileAndStore(code, parsed.filename || 'patch.dsp');
-    announceSubmit({ sha1, previous, code, filename: parsed.filename || 'patch.dsp', errors });
+    announceSubmit({ sha1, previous, edited, code, filename: parsed.filename || 'patch.dsp', errors });
     return ok({ sha1, errors });
   } catch (err) {
     return fail(String(err && err.message ? err.message : err));
@@ -437,7 +438,7 @@ async function handleVersion() {
 }
 
 function handleAppVersion() {
-  return ok({ version: '0.13.1' });
+  return ok({ version: '0.13.2' });
 }
 
 function handleFaustHelp() {
