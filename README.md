@@ -222,7 +222,13 @@ npm pack @grame/faustwasm@0.19.6 && tar xzf grame-faustwasm-0.19.6.tgz
 cp package/dist/esm/index.js webapp/faustwasm/index.js
 cp package/dist/esm/index.js webapp/vendor/faustwasm/index.js
 cp package/libfaust-wasm/libfaust-wasm.{js,data,wasm} webapp/libfaust-wasm/
+node scripts/build-doc-index.mjs
 ```
+
+The last command rebuilds `webapp/faust-doc-index.json`, the documentation of the libraries used by the
+completion and the library tools (`search_faust_lib`, `get_faust_symbol`, `list_faust_module`...), from
+the `.lib` files of the embedded libfaust; `webapp/doc-index.test.mjs` fails when it is out of date
+(`node scripts/build-doc-index.mjs --check` tells the same).
 
 Update both applications together. When faustcode is opened by faustmodular, its ready message carries
 its version of libfaust, and faustmodular warns if it differs from its own. (Known issue of libfaust
