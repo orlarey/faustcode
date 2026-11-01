@@ -124,14 +124,14 @@ The webapp recognises these query strings :
   `--token` flag, otherwise the connection is rejected.
 - `?code=…&name=…&view=…&poly=…` — open a shared DSP (cf.
   `spec_share_url.md`).
-- `?link=playground` — this window edits the modules of the
-  [FaustPlayground](https://github.com/orlarey/faustplayground-extended)
+- `?link=modular` — this window edits the modules of the
+  [faustmodular](https://github.com/orlarey/faustplayground-extended) (formerly FaustPlayground)
   page that opened it (see below).
 
-## Edit FaustPlayground modules
+## Edit faustmodular modules
 
-The pencil of a FaustPlayground module opens faustcode in a window
-reused for all the modules (`?link=playground`). The module's code
+The pencil of a faustmodular module opens faustcode in a window
+reused for all the modules (`?link=modular`). The module's code
 becomes a session, shown in the dsp view once ENTER is clicked. Each
 save of that session that compiles (`Cmd/Ctrl-S` in the dsp view or the
 floating editor, or an MCP `submit` while it is active) is sent back to

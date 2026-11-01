@@ -1,7 +1,9 @@
-// playground-link.js — edit the code of FaustPlayground modules in faustcode
-// (spec_playground_link.md).
+// playground-link.js — edit the code of faustmodular modules in faustcode
+// (spec_playground_link.md). faustmodular was called faustmodular (extended)
+// before 2.10.0, hence the names of this file and of its messages.
 //
-// FaustPlayground opens faustcode with ?link=playground in a window it
+// faustmodular opens faustcode with ?link=modular (?link=playground before
+// 2.10.0, still accepted) in a window it
 // keeps a reference to (window.opener here). The two pages may have
 // different origins : they talk with postMessage. Every message carries
 // `type` and `protocol` (LINK_PROTOCOL) :
@@ -27,12 +29,12 @@
 
 export const LINK_PROTOCOL = 1;
 export const LINK_PARAM = 'link';
-export const LINK_VALUE = 'playground';
+export const LINK_VALUES = ['modular', 'playground'];
 export const SUBMITTED_EVENT = 'faustcode:submitted';
 
-/** True when faustcode was opened by FaustPlayground (?link=playground). */
+/** True when faustcode was opened by faustmodular (?link=modular, or ?link=playground). */
 export function isPlaygroundLink(search) {
-  return new URLSearchParams(search).get(LINK_PARAM) === LINK_VALUE;
+  return LINK_VALUES.includes(new URLSearchParams(search).get(LINK_PARAM));
 }
 
 /**
@@ -113,7 +115,7 @@ export class LinkTable {
 }
 
 /**
- * Starts the link when faustcode was opened by FaustPlayground.
+ * Starts the link when faustcode was opened by faustmodular.
  * @param {{
  *   submit: (code: string, filename: string) => Promise<{ sha1: string, errors: string }>,
  *   show: (sha1: string) => Promise<void>,   // make the session visible in the dsp view
@@ -148,33 +150,33 @@ export function installPlaygroundLink({ submit, show, notify, log = () => {} }) 
         try {
           result = await submit(m.code, sessionFilename(m.name));
         } catch (err) {
-          notify(`FaustPlayground : ${m.name} could not be opened (${err && err.message ? err.message : err})`, 10000);
+          notify(`faustmodular : ${m.name} could not be opened (${err && err.message ? err.message : err})`, 10000);
           return;
         } finally {
           explicit = false;
         }
         if (result.errors && String(result.errors).trim()) {
           // not stored : nothing to edit
-          notify(`FaustPlayground : ${m.name} does not compile in faustcode : ${String(result.errors).split('\n')[0]}`, 10000);
+          notify(`faustmodular : ${m.name} does not compile in faustcode : ${String(result.errors).split('\n')[0]}`, 10000);
           log('warn', `playground link : ${m.name} does not compile`);
           return;
         }
         table.link(result.sha1, { id: m.id, name: m.name });
         log('info', `playground link : ${m.name} (${result.sha1.slice(0, 8)}) from ${origin}`);
         await show(result.sha1);
-        notify(`Linked to FaustPlayground : ${m.name}. Each successful save (Cmd/Ctrl-S) updates the module.`, 8000);
+        notify(`Linked to faustmodular : ${m.name}. Each successful save (Cmd/Ctrl-S) updates the module.`, 8000);
         try { window.focus(); } catch { /* ignore */ }
         break;
       }
       case 'faustcode-link-result': {
         const name = table.nameOf(m.id) || 'module';
-        if (m.ok) notify(`FaustPlayground : ${name} updated`, 2000);
-        else notify(`FaustPlayground did not apply ${name} : ${String(m.error || '').split('\n')[0]}`, 10000);
+        if (m.ok) notify(`faustmodular : ${name} updated`, 2000);
+        else notify(`faustmodular did not apply ${name} : ${String(m.error || '').split('\n')[0]}`, 10000);
         break;
       }
       case 'faustcode-link-close': {
         const name = table.unlink(m.id);
-        if (name) notify(`FaustPlayground : ${name} was removed, its sessions are no longer linked`, 8000);
+        if (name) notify(`faustmodular : ${name} was removed, its sessions are no longer linked`, 8000);
         break;
       }
     }
@@ -186,7 +188,7 @@ export function installPlaygroundLink({ submit, show, notify, log = () => {} }) 
     const module = table.follow(previous, sha1);
     if (!module || (errors && String(errors).trim())) return;
     if (!post({ type: 'faustcode-link-code', id: module.id, code })) {
-      notify('FaustPlayground is closed : the module was not updated', 8000);
+      notify('faustmodular is closed : the module was not updated', 8000);
     }
   });
 

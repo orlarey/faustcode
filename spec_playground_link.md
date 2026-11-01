@@ -18,6 +18,10 @@ language: fr
 - **Critères d'acceptation** — ce qui est vérifié par les tests.
 :::
 
+::: note [Mise à jour du 1er novembre 2026]
+FaustPlayground (étendu) s'appelle désormais **faustmodular** (version 2.10.0). Il ouvre faustcode avec `?link=modular`, dans une fenêtre nommée `faustcode-modular` ; `?link=playground` reste accepté. Le protocole de messages est inchangé. L'éditeur intégré du playground a été supprimé en 2.9.0 : faustcode est son seul éditeur.
+:::
+
 # Objet
 
 L'éditeur intégré de FaustPlayground est une simple zone de texte : ni coloration, ni numéros de ligne, et une erreur de compilation vidait le module. faustcode a tout ce qui manque (CodeMirror, complétion, erreurs à la ligne, diagramme, oscilloscope, spectre, documentation, MCP). Le crayon d'un module du playground ouvre donc son code dans faustcode, et chaque sauvegarde qui compile met le module à jour en place.

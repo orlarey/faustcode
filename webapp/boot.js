@@ -43,7 +43,7 @@ import { showNotice } from './notice.js';
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
 
-const WEBAPP_VERSION = '0.13.0';
+const WEBAPP_VERSION = '0.13.1';
 
 // 1. Synchronously install the fetch shim BEFORE any view code runs.
 installApiShim();
@@ -276,7 +276,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
       }
     }
   }
-  // Opened by FaustPlayground to edit its modules (playground-link.js) :
+  // Opened by faustmodular to edit its modules (playground-link.js) :
   // like a shared link, do not take the MCP bridge from a faustcode tab
   // already open.
   if (isPlaygroundLink(location.search) && (await probeTabs()).length > 0) mcpAutoConnect = false;
@@ -411,7 +411,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     onOpen: openSharedFromOtherTab,
   });
 
-  // Editor of FaustPlayground modules (?link=playground) : the module's
+  // Editor of faustmodular modules (?link=modular) : the module's
   // code becomes a session, shown in the dsp view ; each successful save
   // of it is sent back to the playground.
   installPlaygroundLink({

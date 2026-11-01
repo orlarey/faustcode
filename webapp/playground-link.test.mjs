@@ -9,8 +9,9 @@ import {
   sessionFilename,
 } from './playground-link.js';
 
-test('recognises the URL of a faustcode window opened by FaustPlayground', () => {
-  assert.equal(isPlaygroundLink('?link=playground'), true);
+test('recognises the URL of a faustcode window opened by faustmodular', () => {
+  assert.equal(isPlaygroundLink('?link=modular'), true);
+  assert.equal(isPlaygroundLink('?link=playground'), true);       // before faustmodular 2.10.0
   assert.equal(isPlaygroundLink('?mcp=ws://x&link=playground'), true);
   assert.equal(isPlaygroundLink(''), false);
   assert.equal(isPlaygroundLink('?link=other'), false);
