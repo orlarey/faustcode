@@ -125,7 +125,7 @@ The webapp recognises these query strings :
 - `?code=…&name=…&view=…&poly=…` — open a shared DSP (cf.
   `spec_share_url.md`).
 - `?link=modular` — this window edits the modules of the
-  [faustmodular](https://github.com/orlarey/faustplayground-extended) (formerly FaustPlayground)
+  [faustmodular](https://github.com/orlarey/faustmodular) (formerly FaustPlayground)
   page that opened it (see below).
 
 ## Edit faustmodular modules
