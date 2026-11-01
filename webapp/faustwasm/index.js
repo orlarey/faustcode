@@ -12,7 +12,7 @@ var instantiateFaustModuleFromFile = async (jsFile, dataFile = jsFile.replace(/c
   let FaustModule;
   let dataBinary;
   let wasmBinary;
-  const jsCodeHead = /var (.+) = \(/;
+  const jsCodeHead = /var (\w+)\s*=\s*\(/;
   if (typeof window === "object") {
     let jsCode = await (await fetch(jsFile)).text();
     jsCode = `${jsCode}
@@ -45,13 +45,18 @@ ${jsCode}
 
 export default ${(_b = jsCode.match(jsCodeHead)) == null ? void 0 : _b[1]};
 `;
-    const jsFileMod = jsFile.replace(/c?js$/, "mjs");
+    const unique = `${process.pid.toString(36)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const jsFileMod = jsFile.replace(/c?js$/, `${unique}.mjs`);
     await fs.writeFile(jsFileMod, jsCode);
-    FaustModule = (await import(
-      /* webpackIgnore: true */
-      pathToFileURL(jsFileMod).href
-    )).default;
-    await fs.unlink(jsFileMod);
+    try {
+      FaustModule = (await import(
+        /* webpackIgnore: true */
+        pathToFileURL(jsFileMod).href
+      )).default;
+    } finally {
+      await fs.unlink(jsFileMod).catch(() => {
+      });
+    }
     dataBinary = new Uint8Array(await fs.readFile(dataFile)).buffer;
     wasmBinary = new Uint8Array(await fs.readFile(wasmFile)).buffer;
   }
@@ -69,6 +74,14 @@ var instantiateFaustModuleFromFile_default = instantiateFaustModuleFromFile;
 // src/FaustAudioWorkletProcessor.ts
 var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) => {
   const { registerProcessor, AudioWorkletProcessor, sampleRate } = globalThis;
+  const audioClock = globalThis;
+  const kBlockSize = 128;
+  const kFromAutomation = -2;
+  const kFromSensors = -1;
+  const kCancelled = () => {
+  };
+  const kRampChanges = 16;
+  const kRampStride = 16;
   const {
     FaustBaseWebAudioDsp: FaustBaseWebAudioDsp2,
     FaustWasmInstantiator: FaustWasmInstantiator2,
@@ -107,6 +120,26 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
     constructor(options) {
       super(options);
       this.paramValuesCache = {};
+      /**
+       * Port messages waiting for the block they were timestamped for.
+       *
+       * Sorted by frame, then by arrival. `process` drains everything up to
+       * the end of the block it is about to render; the rest waits.
+       */
+      this.fEventQueue = [];
+      this.fEventSeq = 0;
+      /**
+       * The events of the block about to be rendered.
+       *
+       * Refilled rather than reallocated, so a quiet block allocates
+       * nothing.
+       */
+      this.fBlockEvents = [];
+      /**
+       * Scratch space for the frames one control's automation changed on.
+       * Reused for the same reason as `fBlockEvents`.
+       */
+      this.fChangedFrames = [];
       this.fCommunicator = new FaustAudioWorkletProcessorCommunicator2(
         this.port
       );
@@ -120,13 +153,27 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
     }
     static get parameterDescriptors() {
       const params = [];
-      const callback = (item) => {
+      const origin = /* @__PURE__ */ new Map();
+      const collect = (side) => (item) => {
         const param = analysePolyParameters(item);
-        if (param) params.push(param);
+        if (!param) return;
+        const previous = origin.get(param.name);
+        if (previous === side) {
+          throw new Error(
+            `Faust: control "${param.name}" is declared twice in the ${side}. Two widgets resolved to the same path, so one of them would be unreachable. Give them distinct labels or groups.`
+          );
+        }
+        if (previous !== void 0) {
+          throw new Error(
+            `Faust: control "${param.name}" is declared both in the ${previous} and in the ${side}. A polyphonic DSP cannot share a control path between \`process\` and \`effect\`: setParamValue routes a path to one side only, so the other would keep its default. Declare it under a distinct path on each side and have the host write both.`
+          );
+        }
+        origin.set(param.name, side);
+        params.push(param);
       };
-      FaustBaseWebAudioDsp2.parseUI(dspMeta.ui, callback);
+      FaustBaseWebAudioDsp2.parseUI(dspMeta.ui, collect("voice"));
       if (effectMeta)
-        FaustBaseWebAudioDsp2.parseUI(effectMeta.ui, callback);
+        FaustBaseWebAudioDsp2.parseUI(effectMeta.ui, collect("effect"));
       return params;
     }
     setupWamEventHandler() {
@@ -142,61 +189,237 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
       if (paramMgrProcessor.handleEvent) return;
       paramMgrProcessor.handleEvent = (event) => {
         if (event.type === "wam-midi")
-          this.midiMessage(event.data.bytes);
+          this.atTime(
+            event,
+            () => this.midiMessage(event.data.bytes)
+          );
       };
     }
-    process(inputs, outputs, parameters) {
-      for (const path in parameters) {
-        const [paramValue] = parameters[path];
-        if (paramValue !== this.paramValuesCache[path]) {
-          this.setParamValue(path, paramValue);
+    /**
+     * Read a message's timestamp as a whole frame on the audio clock.
+     * Null if it carries none, meaning now.
+     *
+     * Both routes round, and both reject anything non-finite. A fraction
+     * would become a fractional slice count and a channel pointer partway
+     * through a sample. A NaN compares false against every frame, so a
+     * queued one would stay at the head of the queue and block every event
+     * behind it.
+     */
+    messageFrame(msg) {
+      const frame = Number.isFinite(msg.frame) ? msg.frame : Number.isFinite(msg.time) ? msg.time * sampleRate : null;
+      return frame === null ? null : Math.round(frame);
+    }
+    /**
+     * Apply `apply` now, or queue it for the frame the sender asked for.
+     *
+     * Untimed messages are applied on arrival, between two blocks, which
+     * is equivalent to frame 0 of the next one. A throw from one of those
+     * escapes the port handler and costs that message, as it always did.
+     *
+     * Timed ones have to catch. They run from inside `process`, and the
+     * Web Audio spec's response to a `process` that throws is to fire
+     * `processorerror` and stop calling the node -- so one bad message
+     * would silence the device permanently.
+     */
+    atTime(msg, apply) {
+      const frame = this.messageFrame(msg);
+      if (frame === null) {
+        apply();
+        return;
+      }
+      const event = {
+        frame,
+        seq: this.fEventSeq++,
+        apply: () => {
+          try {
+            apply();
+          } catch (error) {
+            console.error(
+              `Faust: a message timed for frame ${frame} threw and was dropped`,
+              error
+            );
+          }
         }
+      };
+      let i = this.fEventQueue.length;
+      while (i > 0 && this.fEventQueue[i - 1].frame > frame) i--;
+      this.fEventQueue.splice(i, 0, event);
+    }
+    /**
+     * Cancel everything scheduled and not yet performed.
+     *
+     * A panic, or the end of the DSP's life, has to reach the notes that
+     * have not sounded yet as well as the ones that have -- otherwise they
+     * play afterwards, over a device that was told to be quiet.
+     *
+     * That means the queue and the rest of the block being rendered, whose
+     * events have already left the queue. Messages only: automation and
+     * sensor writes are the state of the controls through the block, and
+     * an all-notes-off should not stop a filter sweep.
+     */
+    flushEvents() {
+      this.fEventQueue.length = 0;
+      for (const event of this.fBlockEvents) {
+        if (event.seq >= 0) event.apply = kCancelled;
+      }
+    }
+    /**
+     * Whether a controller number silences the instrument.
+     *
+     * Exactly the two `FaustPolyWebAudioDsp.ctrlChange` treats as
+     * all-notes-off. Not 121, which resets controllers without ending a
+     * note, and not 122, which is a keyboard's local control.
+     */
+    isPanic(ctrl) {
+      return ctrl === 120 || ctrl === 123;
+    }
+    /**
+     * One control's automation for the block, as events.
+     *
+     * A control that holds arrives as a single value, worth an event only
+     * if it differs from what the DSP has. A control that moves arrives as
+     * 128, and each change is an edge due on its own frame.
+     *
+     * Reading only `[0]`, as this used to, pushes every `setValueAtTime`
+     * out to the next block boundary and misses a `1 -> 0 -> 1` inside one
+     * block completely -- a gate that never retriggers.
+     *
+     * Above `kRampChanges` the control is ramping rather than stepping,
+     * and is followed at `kRampStride`. See the constants.
+     */
+    collectAutomation(path, automation, events) {
+      const changes = this.fChangedFrames;
+      changes.length = 0;
+      let last = this.paramValuesCache[path];
+      for (let i = 0; i < automation.length; i++) {
+        if (automation[i] === last) continue;
+        last = automation[i];
+        changes.push(i);
+      }
+      if (changes.length === 0) return;
+      const stride = changes.length > kRampChanges ? kRampStride : 1;
+      for (let n = 0; n < changes.length; n += stride) {
+        const frame = changes[n];
+        events.push(this.paramEvent(path, automation[frame], frame));
+      }
+      const lastChange = changes.length - 1;
+      if (lastChange % stride) {
+        const frame = changes[lastChange];
+        events.push(this.paramEvent(path, automation[frame], frame));
+      }
+    }
+    paramEvent(path, value, frame) {
+      return {
+        frame,
+        seq: kFromAutomation,
+        apply: () => this.setParamValue(path, value)
+      };
+    }
+    /**
+     * Everything due inside the block starting at `start`.
+     *
+     * Three sources: the automation each `AudioParam` handed over, any new
+     * sensor readings, and the port messages timestamped for a frame
+     * inside the block.
+     *
+     * Sorted by frame, and on a tie by source -- see `FaustTimedEventSeq`.
+     */
+    collectEvents(parameters, start) {
+      const events = this.fBlockEvents;
+      events.length = 0;
+      for (const path in parameters) {
+        this.collectAutomation(path, parameters[path], events);
       }
       if (this.fCommunicator.getNewAccDataAvailable()) {
         const acc = this.fCommunicator.getAcc();
         if (acc) {
           this.fCommunicator.setNewAccDataAvailable(false);
           const { invert, ...data } = acc;
-          this.propagateAcc(data, invert);
+          events.push({
+            frame: 0,
+            seq: kFromSensors,
+            apply: () => this.propagateAcc(data, invert)
+          });
         }
       }
       if (this.fCommunicator.getNewGyrDataAvailable()) {
         const gyr = this.fCommunicator.getGyr();
         if (gyr) {
           this.fCommunicator.setNewGyrDataAvailable(false);
-          this.propagateGyr(gyr);
+          events.push({
+            frame: 0,
+            seq: kFromSensors,
+            apply: () => this.propagateGyr(gyr)
+          });
         }
       }
-      return this.fDSPCode.compute(inputs[0], outputs[0]);
+      const end = start + kBlockSize;
+      let ordinal = 0;
+      while (this.fEventQueue.length && this.fEventQueue[0].frame < end) {
+        const event = this.fEventQueue.shift();
+        event.frame = Math.max(0, event.frame - start);
+        event.seq = ordinal++;
+        events.push(event);
+      }
+      if (events.length > 1) {
+        events.sort((a, b) => a.frame - b.frame || a.seq - b.seq);
+      }
+      return events;
+    }
+    process(inputs, outputs, parameters) {
+      const events = this.collectEvents(
+        parameters,
+        audioClock.currentFrame
+      );
+      return this.fDSPCode.compute(inputs[0], outputs[0], events);
     }
     handleMessageAux(e) {
       const msg = e.data;
       switch (msg.type) {
         // Generic MIDI message
         case "midi": {
-          this.midiMessage(msg.data);
+          this.atTime(msg, () => {
+            if (msg.data[0] >> 4 === 11 && this.isPanic(msg.data[1]))
+              this.flushEvents();
+            this.midiMessage(msg.data);
+          });
           break;
         }
         // Typed MIDI message
         case "ctrlChange": {
-          this.ctrlChange(msg.data[0], msg.data[1], msg.data[2]);
+          this.atTime(msg, () => {
+            if (this.isPanic(msg.data[1])) this.flushEvents();
+            this.ctrlChange(msg.data[0], msg.data[1], msg.data[2]);
+          });
           break;
         }
         case "pitchWheel": {
-          this.pitchWheel(msg.data[0], msg.data[1]);
+          this.atTime(
+            msg,
+            () => this.pitchWheel(msg.data[0], msg.data[1])
+          );
           break;
         }
         case "keyOn": {
-          this.keyOn(msg.data[0], msg.data[1], msg.data[2]);
+          this.atTime(
+            msg,
+            () => this.keyOn(msg.data[0], msg.data[1], msg.data[2])
+          );
           break;
         }
         case "keyOff": {
-          this.keyOff(msg.data[0], msg.data[1], msg.data[2]);
+          this.atTime(
+            msg,
+            () => this.keyOff(msg.data[0], msg.data[1], msg.data[2])
+          );
           break;
         }
         // Generic data message
         case "param": {
-          this.setParamValue(msg.data.path, msg.data.value);
+          this.atTime(
+            msg,
+            () => this.setParamValue(msg.data.path, msg.data.value)
+          );
           break;
         }
         // Plot handler set on demand
@@ -215,8 +438,36 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
           }
           break;
         }
+        // Non-finite guard set on demand
+        case "setNonFiniteHandler": {
+          this.fDSPCode.setNonFiniteHandler(
+            msg.data ? () => this.port.postMessage({ type: "nonfinite" }) : null
+          );
+          break;
+        }
         case "setupWamEventHandler": {
           this.setupWamEventHandler();
+          break;
+        }
+        case "init": {
+          this.fDSPCode.init();
+          break;
+        }
+        case "instanceInit": {
+          this.fDSPCode.instanceInit();
+          break;
+        }
+        case "instanceClear": {
+          this.flushEvents();
+          this.fDSPCode.instanceClear();
+          break;
+        }
+        case "instanceConstants": {
+          this.fDSPCode.instanceConstants();
+          break;
+        }
+        case "instanceResetUserInterface": {
+          this.fDSPCode.instanceResetUserInterface();
           break;
         }
         case "start": {
@@ -224,10 +475,12 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
           break;
         }
         case "stop": {
+          this.flushEvents();
           this.fDSPCode.stop();
           break;
         }
         case "destroy": {
+          this.flushEvents();
           this.port.close();
           this.fDSPCode.destroy();
           break;
@@ -292,19 +545,11 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
   class FaustPolyAudioWorkletProcessor extends FaustAudioWorkletProcessor {
     constructor(options) {
       super(options);
+      // The base switch already routes 'keyOn' and 'keyOff' through
+      // `this.keyOn` / `this.keyOff`, overridden below. This exists only to
+      // bind `this` for the port listener.
       this.handleMessageAux = (e) => {
-        const msg = e.data;
-        switch (msg.type) {
-          case "keyOn":
-            this.keyOn(msg.data[0], msg.data[1], msg.data[2]);
-            break;
-          case "keyOff":
-            this.keyOff(msg.data[0], msg.data[1], msg.data[2]);
-            break;
-          default:
-            super.handleMessageAux(e);
-            break;
-        }
+        super.handleMessageAux(e);
       };
       const { FaustPolyWebAudioDsp: FaustPolyWebAudioDsp3 } = dependencies;
       const {
@@ -364,13 +609,14 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
   }
   const Processor = poly ? FaustPolyAudioWorkletProcessor : FaustMonoAudioWorkletProcessor;
   if (register) {
-    try {
-      registerProcessor(
-        processorName || dspName || (poly ? "mydsp_poly" : "mydsp"),
-        Processor
-      );
-    } catch (error) {
-      console.warn(error);
+    const name = processorName || dspName || (poly ? "mydsp_poly" : "mydsp");
+    const scope = globalThis;
+    if (!scope.__faustRegisteredProcessors) {
+      scope.__faustRegisteredProcessors = /* @__PURE__ */ new Set();
+    }
+    if (!scope.__faustRegisteredProcessors.has(name)) {
+      registerProcessor(name, Processor);
+      scope.__faustRegisteredProcessors.add(name);
     }
   }
   return poly ? FaustPolyAudioWorkletProcessor : FaustMonoAudioWorkletProcessor;
@@ -380,6 +626,8 @@ var FaustAudioWorkletProcessor_default = getFaustAudioWorkletProcessor;
 // src/FaustFFTAudioWorkletProcessor.ts
 var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true) => {
   const { registerProcessor, AudioWorkletProcessor, sampleRate } = globalThis;
+  const audioClock = globalThis;
+  const kBlockSize = 128;
   const {
     FaustBaseWebAudioDsp: FaustBaseWebAudioDsp2,
     FaustWasmInstantiator: FaustWasmInstantiator2,
@@ -449,6 +697,28 @@ var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true
     constructor(options) {
       super(options);
       this.paramValuesCache = {};
+      /**
+       * Port messages waiting for the block they were timestamped for.
+       *
+       * The node puts a `time` on every control it sends. This processor
+       * used to ignore it, which mattered most for MIDI messages: nothing
+       * mirrors those onto an `AudioParam`, so the timestamp did nothing and
+       * the message landed whenever it was posted.
+       *
+       * They now wait here and are applied at the top of the block that
+       * contains the instant. Two limits:
+       *
+       * Block, not sample. This processor buffers input into an FFT window
+       * and hands the DSP whole frames of spectrum, so a control write
+       * partway through what it computes has no meaning.
+       *
+       * A `param` still resolves one block later than that. The
+       * `[0]`-against-cache sync below reads the AudioParam at the start of
+       * the block and writes the pre-`time` value back over it; the intended
+       * value arrives with the next block. Nothing is computed in between,
+       * so there is no artefact.
+       */
+      this.fEventQueue = [];
       this.destroyed = false;
       /** Pointer of next start sample to write of the FFT input window */
       this.$inputWrite = 0;
@@ -470,28 +740,38 @@ var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true
       this.fftSize = 0;
       this.fftBufferSize = 0;
       this.fPlotHandler = null;
+      this.fNonFiniteHandler = null;
       this.fCachedEvents = [];
       this.fBufferNum = 0;
       this.soundfiles = {};
       this.windowFunction = null;
       this.handleMessageAux = (e) => {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         const msg = e.data;
         switch (msg.type) {
           // Generic MIDI message
           case "midi":
-            this.midiMessage(msg.data);
+            this.atTime(msg, () => this.midiMessage(msg.data));
             break;
           // Typed MIDI message
           case "ctrlChange":
-            this.ctrlChange(msg.data[0], msg.data[1], msg.data[2]);
+            this.atTime(
+              msg,
+              () => this.ctrlChange(msg.data[0], msg.data[1], msg.data[2])
+            );
             break;
           case "pitchWheel":
-            this.pitchWheel(msg.data[0], msg.data[1]);
+            this.atTime(
+              msg,
+              () => this.pitchWheel(msg.data[0], msg.data[1])
+            );
             break;
           // Generic data message
           case "param":
-            this.setParamValue(msg.data.path, msg.data.value);
+            this.atTime(
+              msg,
+              () => this.setParamValue(msg.data.path, msg.data.value)
+            );
             break;
           // Plot handler set on demand
           case "setPlotHandler": {
@@ -505,19 +785,27 @@ var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true
             (_a = this.fDSPCode) == null ? void 0 : _a.setPlotHandler(this.fPlotHandler);
             break;
           }
+          // Non-finite guard set on demand
+          case "setNonFiniteHandler": {
+            this.fNonFiniteHandler = msg.data ? () => this.port.postMessage({ type: "nonfinite" }) : null;
+            (_b = this.fDSPCode) == null ? void 0 : _b.setNonFiniteHandler(this.fNonFiniteHandler);
+            break;
+          }
           case "setupWamEventHandler": {
             this.setupWamEventHandler();
             break;
           }
           case "start": {
-            (_b = this.fDSPCode) == null ? void 0 : _b.start();
+            (_c = this.fDSPCode) == null ? void 0 : _c.start();
             break;
           }
           case "stop": {
-            (_c = this.fDSPCode) == null ? void 0 : _c.stop();
+            this.fEventQueue.length = 0;
+            (_d = this.fDSPCode) == null ? void 0 : _d.stop();
             break;
           }
           case "destroy": {
+            this.fEventQueue.length = 0;
             this.port.close();
             this.destroy();
             break;
@@ -600,7 +888,10 @@ var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true
       if (paramMgrProcessor.handleEvent) return;
       paramMgrProcessor.handleEvent = (event) => {
         if (event.type === "wam-midi")
-          this.midiMessage(event.data.bytes);
+          this.atTime(
+            event,
+            () => this.midiMessage(event.data.bytes)
+          );
       };
     }
     processFFT() {
@@ -701,6 +992,7 @@ var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true
         bufferSize
       );
       if (!this.fDSPCode) return true;
+      this.applyDueEvents(audioClock.currentFrame);
       for (const path in parameters) {
         if (fftParamKeywords.find((k) => `/${path}`.endsWith(k)))
           continue;
@@ -766,6 +1058,51 @@ var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true
         this.fCachedEvents = [];
       }
       return true;
+    }
+    /**
+     * Read a message's timestamp as a whole frame on the audio clock.
+     * Null if it carries none, meaning now.
+     *
+     * Rounded, and non-finite values rejected: a NaN compares false
+     * against every frame and would block the queue behind it.
+     */
+    messageFrame(msg) {
+      const frame = Number.isFinite(msg.frame) ? msg.frame : Number.isFinite(msg.time) ? msg.time * sampleRate : null;
+      return frame === null ? null : Math.round(frame);
+    }
+    /**
+     * Apply `apply` now, or at the top of the block containing the frame
+     * the sender asked for.
+     *
+     * Queued ones catch: a throw would otherwise escape `process`, and the
+     * spec's response is to stop calling the node permanently.
+     */
+    atTime(msg, apply2) {
+      const frame = this.messageFrame(msg);
+      if (frame === null) {
+        apply2();
+        return;
+      }
+      const guarded = () => {
+        try {
+          apply2();
+        } catch (error) {
+          console.error(
+            `Faust: a message timed for frame ${frame} threw and was dropped`,
+            error
+          );
+        }
+      };
+      let i = this.fEventQueue.length;
+      while (i > 0 && this.fEventQueue[i - 1].frame > frame) i--;
+      this.fEventQueue.splice(i, 0, { frame, apply: guarded });
+    }
+    /** Apply everything due by the end of the block starting at `start`. */
+    applyDueEvents(start) {
+      const end = start + kBlockSize;
+      while (this.fEventQueue.length && this.fEventQueue[0].frame < end) {
+        this.fEventQueue.shift().apply();
+      }
     }
     setParamValue(path, value) {
       var _a;
@@ -878,6 +1215,7 @@ var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true
       this.fDSPCode.setInputParamHandler(
         (path, value) => this.port.postMessage({ path, value, type: "in-param" })
       );
+      this.fDSPCode.setNonFiniteHandler(this.fNonFiniteHandler);
       this.fDSPCode.setPlotHandler(this.fPlotHandler);
       const params = this.fDSPCode.getParams();
       this.fDSPCode.start();
@@ -911,13 +1249,14 @@ var getFaustFFTAudioWorkletProcessor = (dependencies, faustData, register = true
   }
   const Processor = FaustFFTAudioWorkletProcessor;
   if (register) {
-    try {
-      registerProcessor(
-        processorName || dspName || "myfftdsp",
-        Processor
-      );
-    } catch (error) {
-      console.warn(error);
+    const name = processorName || dspName || "myfftdsp";
+    const scope = globalThis;
+    if (!scope.__faustRegisteredProcessors) {
+      scope.__faustRegisteredProcessors = /* @__PURE__ */ new Set();
+    }
+    if (!scope.__faustRegisteredProcessors.has(name)) {
+      registerProcessor(name, Processor);
+      scope.__faustRegisteredProcessors.add(name);
     }
   }
   return FaustFFTAudioWorkletProcessor;
@@ -1386,9 +1725,7 @@ var _FaustCompiler = class _FaustCompiler {
     if (_FaustCompiler.gFactories.size > 10) {
       _FaustCompiler.gFactories.clear();
     }
-    const shaKey = await sha256(
-      name + code + args + (poly ? "poly" : "mono")
-    );
+    const shaKey = await sha256(JSON.stringify([name, code, args, poly]));
     if (_FaustCompiler.gFactories.has(shaKey)) {
       return _FaustCompiler.gFactories.get(shaKey) || null;
     } else {
@@ -1676,40 +2013,32 @@ var FaustWasmInstantiator = class {
         `=> exception raised while running loadDSPFactory, file not found: ${wasmPath}`
       );
     }
-    try {
-      const wasmBuffer = await wasmFile.arrayBuffer();
-      const module = await WebAssembly.compile(wasmBuffer);
-      const jsonFile = await fetch(jsonPath);
-      const json = await jsonFile.text();
-      const meta = JSON.parse(json);
-      const cOptions = meta.compile_options;
-      const poly = cOptions.indexOf("wasm-e") !== -1;
-      return {
-        cfactory: 0,
-        code: new Uint8Array(wasmBuffer),
-        module,
-        json,
-        poly
-      };
-    } catch (e) {
-      throw e;
-    }
+    const wasmBuffer = await wasmFile.arrayBuffer();
+    const module = await WebAssembly.compile(wasmBuffer);
+    const jsonFile = await fetch(jsonPath);
+    const json = await jsonFile.text();
+    const meta = JSON.parse(json);
+    const cOptions = meta.compile_options;
+    const poly = cOptions.indexOf("wasm-e") !== -1;
+    return {
+      cfactory: 0,
+      code: new Uint8Array(wasmBuffer),
+      module,
+      json,
+      poly
+    };
   }
   static async loadDSPMixer(mixerPath, fs) {
-    try {
-      let mixerBuffer = null;
-      if (fs) {
-        mixerBuffer = new Uint8Array(
-          fs.readFile(mixerPath, { encoding: "binary" })
-        );
-      } else {
-        const mixerFile = await fetch(mixerPath);
-        mixerBuffer = await mixerFile.arrayBuffer();
-      }
-      return WebAssembly.compile(mixerBuffer);
-    } catch (e) {
-      throw e;
+    let mixerBuffer = null;
+    if (fs) {
+      mixerBuffer = new Uint8Array(
+        fs.readFile(mixerPath, { encoding: "binary" })
+      );
+    } else {
+      const mixerFile = await fetch(mixerPath);
+      mixerBuffer = await mixerFile.arrayBuffer();
     }
+    return WebAssembly.compile(mixerBuffer);
   }
   static async createAsyncMonoDSPInstance(factory) {
     const pattern = /"type":\s*"soundfile"/;
@@ -2265,14 +2594,14 @@ var WasmAllocator = class {
   }
   /**
    * Allocates a block of memory of the specified size, returning the pointer to the
-   * beginning of the block. The block is allocated at the current offset and the
-   * offset is incremented by the size of the block.
+   * beginning of the block. The block is allocated at the current offset, aligned on
+   * 8 bytes, and the offset is incremented by the size of the block.
    *
    * @param sizeInBytes The size of the block to allocate in bytes.
    * @returns The offset (pointer) to the beginning of the allocated block.
    */
   alloc(sizeInBytes) {
-    const currentOffset = this.allocatedBytes;
+    const currentOffset = this.allocatedBytes + 7 & ~7;
     const newOffset = currentOffset + sizeInBytes;
     const totalMemoryBytes = this.memory.buffer.byteLength;
     if (newOffset > totalMemoryBytes) {
@@ -2331,7 +2660,10 @@ var Soundfile = class _Soundfile {
   static get MAX_SOUNDFILE_PARTS() {
     return 256;
   }
-  /** Maximum number of channels. */
+  /**
+   * @deprecated channels are no more duplicated up to MAX_CHAN: the generated code
+   * reads channel 'chan % fChannels'.
+   */
   static get MAX_CHAN() {
     return 64;
   }
@@ -2343,15 +2675,18 @@ var Soundfile = class _Soundfile {
   static get SAMPLE_RATE() {
     return 44100;
   }
-  constructor(allocator, sampleSize, curChan, length, maxChan, totalParts) {
+  /**
+   * @param _maxChan - deprecated and ignored: only the curChan real channels are allocated
+   */
+  constructor(allocator, sampleSize, curChan, length, _maxChan, totalParts) {
     this.fSampleSize = sampleSize;
     this.fIntSize = this.fSampleSize;
     this.fPtrSize = 4;
     this.fAllocator = allocator;
     console.log(
-      `Soundfile constructor: curChan: ${curChan}, length: ${length}, maxChan: ${maxChan}, totalParts: ${totalParts}`
+      `Soundfile constructor: curChan: ${curChan}, length: ${length}, totalParts: ${totalParts}`
     );
-    this.fPtr = allocator.alloc(4 * this.fPtrSize);
+    this.fPtr = allocator.alloc(4 * this.fPtrSize + 3 * 4);
     this.fLength = allocator.alloc(
       _Soundfile.MAX_SOUNDFILE_PARTS * this.fIntSize
     );
@@ -2361,19 +2696,22 @@ var Soundfile = class _Soundfile {
     this.fOffset = allocator.alloc(
       _Soundfile.MAX_SOUNDFILE_PARTS * this.fIntSize
     );
-    this.fBuffers = this.allocBuffers(curChan, length, maxChan);
+    this.fBuffers = this.allocBuffers(curChan, length);
     const HEAP32 = this.fAllocator.getInt32Array();
     HEAP32[this.fPtr >> 2] = this.fBuffers;
     HEAP32[this.fPtr + this.fPtrSize >> 2] = this.fLength;
     HEAP32[this.fPtr + 2 * this.fPtrSize >> 2] = this.fSR;
     HEAP32[this.fPtr + 3 * this.fPtrSize >> 2] = this.fOffset;
+    HEAP32[this.fPtr + 4 * this.fPtrSize >> 2] = curChan;
+    HEAP32[this.fPtr + 4 * this.fPtrSize + 4 >> 2] = totalParts;
+    HEAP32[this.fPtr + 4 * this.fPtrSize + 8 >> 2] = this.fSampleSize === 8 ? 1 : 0;
     for (let chan = 0; chan < curChan; chan++) {
       const buffer = HEAP32[(this.fBuffers >> 2) + chan];
       console.log(`allocBuffers AFTER: ${chan} - ${buffer}`);
     }
   }
-  allocBuffers(curChan, length, maxChan) {
-    const buffers = this.fAllocator.alloc(maxChan * this.fPtrSize);
+  allocBuffers(curChan, length) {
+    const buffers = this.fAllocator.alloc(curChan * this.fPtrSize);
     console.log(`allocBuffers buffers: ${buffers}`);
     for (let chan = 0; chan < curChan; chan++) {
       const buffer = this.fAllocator.alloc(
@@ -2383,12 +2721,6 @@ var Soundfile = class _Soundfile {
       HEAP32[(buffers >> 2) + chan] = buffer;
     }
     return buffers;
-  }
-  shareBuffers(curChan, maxChan) {
-    const HEAP32 = this.fAllocator.getInt32Array();
-    for (let chan = curChan; chan < maxChan; chan++) {
-      HEAP32[(this.fBuffers >> 2) + chan] = HEAP32[(this.fBuffers >> 2) + chan % curChan];
-    }
   }
   copyToOut(part, maxChannels, offset, audioData) {
     if (this.fIntSize === 4) {
@@ -2512,6 +2844,9 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
     this.fOutputHandler = null;
     this.fInputHandler = null;
     this.fComputeHandler = null;
+    // Told once when the DSP first produces a non-finite output sample
+    this.fNonFiniteHandler = null;
+    this.fNonFiniteReported = false;
     // To handle MIDI events plot
     this.fPlotHandler = null;
     this.fCachedEvents = [];
@@ -2526,6 +2861,18 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
     // Soundfile handling
     this.fSoundfiles = [];
     this.fSoundfileBuffers = {};
+    /**
+     * Block-start address of every wasm audio channel, plus the heap view
+     * holding the pointer tables.
+     *
+     * Rendering a slice means giving wasm a channel pointer to the slice's
+     * first frame, so `setBufferOffset` rewrites the tables and needs these
+     * unmoved addresses to offset from. Only the tables move; the
+     * `fInChannels` / `fOutChannels` views from `initMemory` still span the
+     * whole block and stay valid.
+     */
+    this.fInBase = [];
+    this.fOutBase = [];
     // MIDI handling
     this.fPitchwheelLabel = [];
     this.fCtrlLabel = new Array(128).fill(null).map(() => []);
@@ -2534,6 +2881,8 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
     this.fMidiKeyOnLabel = new Array(128).fill(null).map(() => []);
     this.fMidiKeyOffLabel = new Array(128).fill(null).map(() => []);
     this.fPathTable = {};
+    /** Paths already complained about, so the warning is not repeated. */
+    this.fUnknownPaths = /* @__PURE__ */ new Set();
     this.fUICallback = (item) => {
       if (item.type === "hbargraph" || item.type === "vbargraph") {
         const registerPath = (alias) => {
@@ -2683,6 +3032,84 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
     this.fSoundfileBuffers = soundfiles;
     this.fAcc = { x: [], y: [], z: [] };
     this.fGyr = { x: [], y: [], z: [] };
+  }
+  /**
+   * Report a parameter path that is in no control's alias list.
+   *
+   * Silence here is expensive: the path is a typo, or one kept from an
+   * older version of the DSP, and without a word the control simply does
+   * nothing while the caller believes it worked. But this can be reached
+   * from the audio thread, at the rate a host moves a slider, so each path
+   * is reported once and then let through quietly.
+   *
+   * @param path - the path that was not found
+   * @param action - what was done instead
+   */
+  warnUnknownPath(path, action) {
+    if (this.fUnknownPaths.has(path)) return;
+    this.fUnknownPaths.add(path);
+    console.warn(
+      `Faust: unknown parameter path "${path}", ${action}. Use getParams() for the list of valid paths.`
+    );
+  }
+  /**
+   * Render a whole block through `render`, stopping at each event.
+   *
+   * Render up to the next event's frame, apply it, continue. Living in the
+   * base class means mono and poly only have to supply what rendering a
+   * slice means.
+   *
+   * With no events the block is one slice, which is what every caller that
+   * passes no events gets.
+   */
+  renderBlock(events, render) {
+    if (!events || events.length === 0) {
+      render(0, this.fBufferSize);
+      return;
+    }
+    let frame = 0;
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+      const at = Math.min(Math.max(event.frame, 0), this.fBufferSize);
+      if (at > frame) {
+        render(frame, at - frame);
+        frame = at;
+      }
+      event.apply();
+    }
+    if (frame < this.fBufferSize) {
+      render(frame, this.fBufferSize - frame);
+    }
+  }
+  /**
+   * Apply every event without rendering.
+   *
+   * For the blocks `compute` returns early from: stopped, or an input or
+   * output not connected yet. The events have already left the processor's
+   * queue, so dropping them here loses them permanently -- a `keyOn` that
+   * never sounds, or a parameter the DSP and the host disagree about from
+   * then on.
+   *
+   * A destroyed DSP is the exception, and does drop them.
+   */
+  applyEvents(events) {
+    if (!events) return;
+    for (let i = 0; i < events.length; i++) events[i].apply();
+  }
+  /**
+   * Point the wasm channel tables at frame `offset` of the block.
+   *
+   * Each slice sets this before rendering, so nothing outside `compute`
+   * depends on where the previous slice left the tables.
+   */
+  setBufferOffset(offset) {
+    const bytes = offset * this.fSampleSize;
+    for (let chan = 0; chan < this.fInBase.length; chan++) {
+      this.fHEAP32[(this.fAudioInputs >> 2) + chan] = this.fInBase[chan] + bytes;
+    }
+    for (let chan = 0; chan < this.fOutBase.length; chan++) {
+      this.fHEAP32[(this.fAudioOutputs >> 2) + chan] = this.fOutBase[chan] + bytes;
+    }
   }
   // Tools
   static remap(v, mn0, mx0, mn1, mx1) {
@@ -2848,7 +3275,12 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
       }
     }
   }
-  createSoundfile(allocator, soundfileIdList, soundfiles, maxChan = Soundfile.MAX_CHAN) {
+  /**
+   * Create a soundfile holding the max number of channels of all its parts.
+   *
+   * @param _maxChan - deprecated and ignored
+   */
+  createSoundfile(allocator, soundfileIdList, soundfiles, _maxChan) {
     let curChan = 1;
     let totalLength = 0;
     for (const soundfileId of soundfileIdList) {
@@ -2871,7 +3303,7 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
       this.fSampleSize,
       curChan,
       totalLength,
-      maxChan,
+      curChan,
       soundfileIdList.length
     );
     let offset = 0;
@@ -2879,7 +3311,7 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
       const soundfileId = soundfileIdList[part];
       const audioData = soundfiles == null ? void 0 : soundfiles[soundfileId];
       if (audioData) {
-        soundfile.copyToOut(part, maxChan, offset, audioData);
+        soundfile.copyToOut(part, curChan, offset, audioData);
         offset += audioData.audioBuffer[0].length;
       } else {
         offset = soundfile.emptyFile(part, offset);
@@ -2888,7 +3320,6 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
     for (let part = soundfileIdList.length; part < Soundfile.MAX_SOUNDFILE_PARTS; part++) {
       offset = soundfile.emptyFile(part, offset);
     }
-    soundfile.shareBuffers(curChan, maxChan);
     return soundfile;
   }
   /**
@@ -2957,6 +3388,46 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
   }
   getPlotHandler() {
     return this.fPlotHandler;
+  }
+  setNonFiniteHandler(handler) {
+    this.fNonFiniteHandler = handler;
+  }
+  getNonFiniteHandler() {
+    return this.fNonFiniteHandler;
+  }
+  /**
+   * With a non-finite handler set, replace every non-finite sample of the block
+   * just computed with 0, and report the first one to the handler.
+   *
+   * A control the compiler cannot know -- a Q, a divisor -- can make Faust code
+   * divide by zero. The NaN stays in the DSP's recursive state for good, and
+   * handed on it would poison every stateful node after this one for good too.
+   * Called on the DSP's own output channels, before they are copied or handed
+   * to an output callback, so every path out of 'compute' is covered.
+   */
+  clearNonFinite() {
+    if (!this.fNonFiniteHandler) return;
+    let found = false;
+    const outputs = this.getNumOutputs();
+    for (let chan = 0; chan < outputs; chan++) {
+      const dspOutput = this.fOutChannels[chan];
+      let sum = 0;
+      for (let frame = 0; frame < dspOutput.length; frame++) {
+        sum += dspOutput[frame];
+      }
+      if (sum - sum === 0) continue;
+      for (let frame = 0; frame < dspOutput.length; frame++) {
+        const sample = dspOutput[frame];
+        if (sample - sample !== 0) {
+          dspOutput[frame] = 0;
+          found = true;
+        }
+      }
+    }
+    if (found && !this.fNonFiniteReported) {
+      this.fNonFiniteReported = true;
+      this.fNonFiniteHandler();
+    }
   }
   getNumInputs() {
     return -1;
@@ -3126,6 +3597,16 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
   stopSensors() {
     this.stopSensors();
   }
+  init() {
+  }
+  instanceInit() {
+  }
+  instanceClear() {
+  }
+  instanceConstants() {
+  }
+  instanceResetUserInterface() {
+  }
   start() {
     this.fProcessing = true;
   }
@@ -3143,8 +3624,23 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
 var FaustMonoWebAudioDsp = class extends FaustBaseWebAudioDsp {
   constructor(instance, sampleRate, sampleSize, bufferSize, soundfiles) {
     super(sampleSize, bufferSize, soundfiles);
+    /**
+     * Render one slice, for `renderBlock`.
+     *
+     * A field rather than an inline closure so it is allocated once instead of
+     * on every `compute` call.
+     */
+    this.fRenderSlice = (offset, count) => {
+      this.setBufferOffset(offset);
+      this.fInstance.api.compute(
+        this.fDSP,
+        count,
+        this.fAudioInputs,
+        this.fAudioOutputs
+      );
+    };
     this.fInstance = instance;
-    console.log(`sampleSize: ${sampleSize} bufferSize: ${bufferSize}`);
+    this.fSampleRate = sampleRate;
     this.fJSONDsp = JSON.parse(this.fInstance.json);
     FaustBaseWebAudioDsp.parseUI(this.fJSONDsp.ui, this.fUICallback);
     this.fEndMemory = this.initMemory();
@@ -3156,6 +3652,21 @@ var FaustMonoWebAudioDsp = class extends FaustBaseWebAudioDsp {
       );
       this.initSoundfileMemory(allocator, this.fDSP);
     }
+  }
+  init() {
+    this.fInstance.api.init(this.fDSP, this.fSampleRate);
+  }
+  instanceInit() {
+    this.fInstance.api.instanceInit(this.fDSP, this.fSampleRate);
+  }
+  instanceClear() {
+    this.fInstance.api.instanceClear(this.fDSP);
+  }
+  instanceConstants() {
+    this.fInstance.api.instanceConstants(this.fDSP, this.fSampleRate);
+  }
+  instanceResetUserInterface() {
+    this.fInstance.api.instanceResetUserInterface(this.fDSP);
   }
   initMemory() {
     this.fDSP = 0;
@@ -3198,6 +3709,15 @@ var FaustMonoWebAudioDsp = class extends FaustBaseWebAudioDsp {
         );
       }
     }
+    this.fHEAP32 = HEAP32;
+    this.fInBase = [];
+    for (let chan = 0; chan < this.getNumInputs(); chan++) {
+      this.fInBase[chan] = HEAP32[(this.fAudioInputs >> 2) + chan];
+    }
+    this.fOutBase = [];
+    for (let chan = 0; chan < this.getNumOutputs(); chan++) {
+      this.fOutBase[chan] = HEAP32[(this.fAudioOutputs >> 2) + chan];
+    }
     return endMemory;
   }
   toString() {
@@ -3209,9 +3729,12 @@ var FaustMonoWebAudioDsp = class extends FaustBaseWebAudioDsp {
         this.fDSP: ${this.fDSP}`;
   }
   // Public API
-  compute(input, output) {
+  compute(input, output, events) {
     if (this.fDestroyed) return false;
-    if (!this.fProcessing) return true;
+    if (!this.fProcessing) {
+      this.applyEvents(events);
+      return true;
+    }
     if (this.fFirstCall) {
       this.initMemory();
       this.fFirstCall = false;
@@ -3220,9 +3743,11 @@ var FaustMonoWebAudioDsp = class extends FaustBaseWebAudioDsp {
       input(this.fInChannels);
     } else {
       if (this.getNumInputs() > 0 && (!input || !input[0] || input[0].length === 0)) {
+        this.applyEvents(events);
         return true;
       }
       if (this.getNumOutputs() > 0 && typeof output !== "function" && (!output || !output[0] || output[0].length === 0)) {
+        this.applyEvents(events);
         return true;
       }
       if (input !== void 0) {
@@ -3233,13 +3758,9 @@ var FaustMonoWebAudioDsp = class extends FaustBaseWebAudioDsp {
       }
     }
     if (this.fComputeHandler) this.fComputeHandler(this.fBufferSize);
-    this.fInstance.api.compute(
-      this.fDSP,
-      this.fBufferSize,
-      this.fAudioInputs,
-      this.fAudioOutputs
-    );
+    this.renderBlock(events, this.fRenderSlice);
     this.updateOutputs();
+    this.clearNonFinite();
     let forPlot = this.fOutChannels;
     if (typeof output === "function") {
       output(this.fOutChannels);
@@ -3270,20 +3791,20 @@ var FaustMonoWebAudioDsp = class extends FaustBaseWebAudioDsp {
     return this.fInstance.api.getNumOutputs(this.fDSP);
   }
   setParamValue(path, value) {
+    const index = this.fPathTable[path];
+    if (index === void 0) return this.warnUnknownPath(path, "ignored");
     if (this.fPlotHandler)
       this.fCachedEvents.push({ type: "param", data: { path, value } });
-    this.fInstance.api.setParamValue(
-      this.fDSP,
-      this.fPathTable[path],
-      value
-    );
+    this.fInstance.api.setParamValue(this.fDSP, index, value);
     this.callInputParamHandler(path, this.getParamValue(path));
   }
   getParamValue(path) {
-    return this.fInstance.api.getParamValue(
-      this.fDSP,
-      this.fPathTable[path]
-    );
+    const index = this.fPathTable[path];
+    if (index === void 0) {
+      this.warnUnknownPath(path, "returning 0");
+      return 0;
+    }
+    return this.fInstance.api.getParamValue(this.fDSP, index);
   }
   getMeta() {
     return this.fJSONDsp;
@@ -3306,7 +3827,6 @@ var FaustWebAudioDspVoice = class _FaustWebAudioDspVoice {
     this.fGainLabel = [];
     this.fKeyLabel = [];
     this.fVelLabel = [];
-    // Voice DSP code
     // Accessed by PolyDSPImp class
     this.fCurNote = _FaustWebAudioDspVoice.kFreeVoice;
     this.fNextNote = -1;
@@ -3315,7 +3835,8 @@ var FaustWebAudioDspVoice = class _FaustWebAudioDspVoice {
     this.fLevel = 0;
     this.fDSP = $dsp;
     this.fAPI = api;
-    this.fAPI.init(this.fDSP, sampleRate);
+    this.fSampleRate = sampleRate;
+    this.init(sampleRate);
     this.extractPaths(inputItems, pathTable);
   }
   // Voice state
@@ -3343,6 +3864,21 @@ var FaustWebAudioDspVoice = class _FaustWebAudioDspVoice {
   static normalizeVelocity(velocity) {
     return velocity / 127;
   }
+  init(sampleRate) {
+    this.fAPI.init(this.fDSP, sampleRate);
+  }
+  instanceInit() {
+    this.fAPI.instanceInit(this.fDSP, this.fSampleRate);
+  }
+  instanceClear() {
+    this.fAPI.instanceClear(this.fDSP);
+  }
+  instanceConstants() {
+    this.fAPI.instanceConstants(this.fDSP, this.fSampleRate);
+  }
+  instanceResetUserInterface() {
+    this.fAPI.instanceResetUserInterface(this.fDSP);
+  }
   extractPaths(inputItems, pathTable) {
     inputItems.forEach((item) => {
       if (item.endsWith("/gate")) {
@@ -3353,7 +3889,7 @@ var FaustWebAudioDspVoice = class _FaustWebAudioDspVoice {
         this.fKeyLabel.push(pathTable[item]);
       } else if (item.endsWith("/gain")) {
         this.fGainLabel.push(pathTable[item]);
-      } else if (item.endsWith("/vel") && item.endsWith("/velocity")) {
+      } else if (item.endsWith("/vel") || item.endsWith("/velocity")) {
         this.fVelLabel.push(pathTable[item]);
       }
     });
@@ -3401,13 +3937,13 @@ var FaustWebAudioDspVoice = class _FaustWebAudioDspVoice {
     }
   }
   computeLegato(bufferSize, $inputs, $outputZero, $outputsHalf) {
-    const size = bufferSize / 2;
+    const size = bufferSize >> 1;
     this.fGateLabel.forEach(
       (index) => this.fAPI.setParamValue(this.fDSP, index, 0)
     );
     this.fAPI.compute(this.fDSP, size, $inputs, $outputZero);
     this.keyOn(this.fNextNote, this.fNextVel);
-    this.fAPI.compute(this.fDSP, size, $inputs, $outputsHalf);
+    this.fAPI.compute(this.fDSP, bufferSize - size, $inputs, $outputsHalf);
   }
   compute(bufferSize, $inputs, $outputs) {
     this.fAPI.compute(this.fDSP, bufferSize, $inputs, $outputs);
@@ -3422,8 +3958,61 @@ var FaustWebAudioDspVoice = class _FaustWebAudioDspVoice {
 var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudioDsp {
   constructor(instance, sampleRate, sampleSize, bufferSize, soundfiles) {
     super(sampleSize, bufferSize, soundfiles);
+    this.fMixingBase = [];
+    /** Voices whose crossfade this block already rendered in full. */
+    this.fStolen = [];
+    /**
+     * Render one slice: every live voice into the sum, then the effect.
+     *
+     * The mixer, the voices and the effect all take a frame count, so a slice
+     * is the same work over fewer frames. A field rather than an inline
+     * closure so it is allocated once instead of on every `compute` call.
+     *
+     * Two things `compute` does around this. The sum is cleared once for the
+     * block, not per slice, because `renderStolenVoices` has already written
+     * across the whole of it. And those stolen voices are skipped here.
+     *
+     * A voice that becomes `kLegatoVoice` partway through the block is not one
+     * of them: it plays out the note it is losing and crossfades at the top of
+     * the next block, as it did when a `keyOn` could only arrive between
+     * blocks.
+     */
+    this.fRenderSlice = (offset, count) => {
+      this.setBufferOffset(offset);
+      this.setMixingOffset(offset, count);
+      this.fVoiceTable.forEach((voice) => {
+        if (voice.fCurNote === FaustWebAudioDspVoice.kFreeVoice) return;
+        if (this.fStolen.length && this.fStolen.indexOf(voice) !== -1)
+          return;
+        voice.compute(count, this.fAudioInputs, this.fAudioMixing);
+        const level = this.fInstance.mixerAPI.mixCheckVoice(
+          count,
+          this.getNumOutputs(),
+          this.fAudioMixing,
+          this.fAudioOutputs
+        );
+        if (level > voice.fLevel) voice.fLevel = level;
+      });
+      if (this.fInstance.effectAPI)
+        this.fInstance.effectAPI.compute(
+          this.fEffect,
+          count,
+          this.fAudioOutputs,
+          this.fAudioOutputs
+        );
+    };
+    /**
+     * When each voice was last allocated, as one global monotonic date.
+     *
+     * Incrementing the voice's own `fDate` instead, as this used to, made the
+     * date a per-slot reuse counter: notes played and released before a chord
+     * kept reusing slot 0 and inflating only its date, and when the chord
+     * then overflowed the pool, the allocator considered a younger note
+     * "oldest" and stole the wrong voice.
+     */
+    this.fDate = 0;
     this.fInstance = instance;
-    console.log(`sampleSize: ${sampleSize} bufferSize: ${bufferSize}`);
+    this.fSampleRate = sampleRate;
     this.fJSONDsp = JSON.parse(this.fInstance.voiceJSON);
     this.fJSONEffect = this.fInstance.effectAPI && this.fInstance.effectJSON ? JSON.parse(this.fInstance.effectJSON) : null;
     FaustBaseWebAudioDsp.parseUI(this.fJSONDsp.ui, this.fUICallback);
@@ -3453,6 +4042,117 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
         this.initSoundfileMemory(allocator, this.fJSONDsp.size * voice);
       }
     }
+  }
+  /**
+   * Render the stolen voices, each across the whole block.
+   *
+   * A steal is a hand-over: the voice plays the note it is losing over the
+   * first half of the buffer, that half fades out, and the new note plays
+   * the second half, faded in. Both fades are needed. `fadeOut` scales the
+   * buffer, not the voice: after `keyOn` the DSP carries on from its live
+   * state -- an envelope that never reached silence is still up -- so
+   * without the fade-in the second half started at full level, a step on
+   * every stolen note. On a monophonic patch whose voice never falls
+   * silent that is a click on every note after the first (measured on a
+   * long-release bass: 0, 0, 0, 0.1485, 0.2618 across the split).
+   *
+   * The fades have to be half a block -- 64 frames -- rather than half a
+   * slice, which late in the block would be a frame or two, or nothing at
+   * all. So this runs before the slicing, and `fRenderSlice` skips these
+   * voices.
+   */
+  renderStolenVoices() {
+    const stolen = this.fStolen;
+    stolen.length = 0;
+    this.fVoiceTable.forEach((voice) => {
+      if (voice.fCurNote !== FaustWebAudioDspVoice.kLegatoVoice) return;
+      stolen.push(voice);
+      voice.computeLegato(
+        this.fBufferSize,
+        this.fAudioInputs,
+        this.fAudioMixing,
+        this.fAudioMixingHalf
+      );
+      this.fInstance.mixerAPI.fadeOut(
+        this.fBufferSize >> 1,
+        this.getNumOutputs(),
+        this.fAudioMixing
+      );
+      this.fadeIn(
+        this.fBufferSize - (this.fBufferSize >> 1),
+        this.getNumOutputs(),
+        this.fAudioMixingHalf
+      );
+      voice.fLevel = this.fInstance.mixerAPI.mixCheckVoice(
+        this.fBufferSize,
+        this.getNumOutputs(),
+        this.fAudioMixing,
+        this.fAudioOutputs
+      );
+    });
+  }
+  /**
+   * Scale `count` frames of each channel at `$tables` from 1/count up to 1.
+   *
+   * The mixer has `fadeOut` in wasm; this is its counterpart on the JS
+   * side, over the channel-pointer table the same way the mixer reads it.
+   */
+  fadeIn(count, chans, $tables) {
+    const shift = Math.log2(this.fSampleSize);
+    const HEAPF = this.fHEAPF;
+    for (let chan = 0; chan < chans; chan++) {
+      const start = this.fHEAP32[($tables >> 2) + chan] >> shift;
+      for (let i = 0; i < count; i++) {
+        HEAPF[start + i] *= (i + 1) / count;
+      }
+    }
+  }
+  /**
+   * Move the mixing tables along with the input and output ones.
+   *
+   * `fAudioMixing` is where a voice renders before being summed into the
+   * output, so it follows the slice. `fAudioMixingHalf` is the crossfade
+   * split point, `count >> 1` frames in, matching `computeLegato`. Only
+   * `renderStolenVoices` uses it, and always with the whole block.
+   */
+  setMixingOffset(offset, count) {
+    const bytes = offset * this.fSampleSize;
+    const half = (offset + (count >> 1)) * this.fSampleSize;
+    for (let chan = 0; chan < this.fMixingBase.length; chan++) {
+      this.fHEAP32[(this.fAudioMixing >> 2) + chan] = this.fMixingBase[chan] + bytes;
+      this.fHEAP32[(this.fAudioMixingHalf >> 2) + chan] = this.fMixingBase[chan] + half;
+    }
+  }
+  init() {
+    this.fVoiceTable.forEach((voice) => voice.init(this.fSampleRate));
+    if (this.fInstance.effectAPI)
+      this.fInstance.effectAPI.init(this.fEffect, this.fSampleRate);
+  }
+  instanceInit() {
+    this.fVoiceTable.forEach((voice) => voice.instanceInit());
+    if (this.fInstance.effectAPI)
+      this.fInstance.effectAPI.instanceInit(
+        this.fEffect,
+        this.fSampleRate
+      );
+  }
+  instanceClear() {
+    this.fVoiceTable.forEach((voice) => voice.instanceClear());
+    if (this.fInstance.effectAPI)
+      this.fInstance.effectAPI.instanceClear(this.fEffect);
+  }
+  instanceConstants() {
+    this.fVoiceTable.forEach((voice) => voice.instanceConstants());
+    if (this.fInstance.effectAPI)
+      this.fInstance.effectAPI.instanceConstants(
+        this.fEffect,
+        this.fSampleRate
+      );
+  }
+  instanceResetUserInterface() {
+    this.fVoiceTable.forEach((voice) => voice.instanceResetUserInterface());
+    if (this.fInstance.effectAPI)
+      this.fInstance.effectAPI.instanceResetUserInterface(this.fEffect);
   }
   initMemory() {
     this.fEffect = this.fJSONDsp.size * this.fInstance.voices;
@@ -3500,6 +4200,18 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
         );
       }
     }
+    this.fHEAP32 = HEAP32;
+    this.fInBase = [];
+    for (let chan = 0; chan < this.getNumInputs(); chan++) {
+      this.fInBase[chan] = HEAP32[(this.fAudioInputs >> 2) + chan];
+    }
+    this.fHEAPF = HEAPF;
+    this.fOutBase = [];
+    this.fMixingBase = [];
+    for (let chan = 0; chan < this.getNumOutputs(); chan++) {
+      this.fOutBase[chan] = HEAP32[(this.fAudioOutputs >> 2) + chan];
+      this.fMixingBase[chan] = HEAP32[(this.fAudioMixing >> 2) + chan];
+    }
     return endMemory;
   }
   toString() {
@@ -3512,7 +4224,7 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
         this.fAudioMixingHalf: ${this.fAudioMixingHalf}`;
   }
   allocVoice(voice, type) {
-    this.fVoiceTable[voice].fDate++;
+    this.fVoiceTable[voice].fDate = this.fDate++;
     this.fVoiceTable[voice].fCurNote = type;
     return voice;
   }
@@ -3576,17 +4288,22 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
     return FaustWebAudioDspVoice.kNoVoice;
   }
   // Public API
-  compute(input, output) {
+  compute(input, output, events) {
     if (this.fDestroyed) return false;
     if (this.fFirstCall) {
       this.initMemory();
       this.fFirstCall = false;
     }
-    if (!this.fProcessing) return true;
+    if (!this.fProcessing) {
+      this.applyEvents(events);
+      return true;
+    }
     if (this.getNumInputs() > 0 && (!input || !input[0] || input[0].length === 0)) {
+      this.applyEvents(events);
       return true;
     }
     if (this.getNumOutputs() > 0 && (!output || !output[0] || output[0].length === 0)) {
+      this.applyEvents(events);
       return true;
     }
     if (input !== void 0) {
@@ -3596,55 +4313,23 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
       }
     }
     if (this.fComputeHandler) this.fComputeHandler(this.fBufferSize);
+    this.setBufferOffset(0);
+    this.setMixingOffset(0, this.fBufferSize);
     this.fInstance.mixerAPI.clearOutput(
       this.fBufferSize,
       this.getNumOutputs(),
       this.fAudioOutputs
     );
+    this.fVoiceTable.forEach((voice) => voice.fLevel = 0);
+    this.renderStolenVoices();
+    this.renderBlock(events, this.fRenderSlice);
     this.fVoiceTable.forEach((voice) => {
-      if (voice.fCurNote === FaustWebAudioDspVoice.kLegatoVoice) {
-        voice.computeLegato(
-          this.fBufferSize,
-          this.fAudioInputs,
-          this.fAudioMixing,
-          this.fAudioMixingHalf
-        );
-        this.fInstance.mixerAPI.fadeOut(
-          this.fBufferSize / 2,
-          this.getNumOutputs(),
-          this.fAudioMixing
-        );
-        voice.fLevel = this.fInstance.mixerAPI.mixCheckVoice(
-          this.fBufferSize,
-          this.getNumOutputs(),
-          this.fAudioMixing,
-          this.fAudioOutputs
-        );
-      } else if (voice.fCurNote !== FaustWebAudioDspVoice.kFreeVoice) {
-        voice.compute(
-          this.fBufferSize,
-          this.fAudioInputs,
-          this.fAudioMixing
-        );
-        voice.fLevel = this.fInstance.mixerAPI.mixCheckVoice(
-          this.fBufferSize,
-          this.getNumOutputs(),
-          this.fAudioMixing,
-          this.fAudioOutputs
-        );
-        if (voice.fCurNote == FaustWebAudioDspVoice.kReleaseVoice && voice.fLevel < FaustWebAudioDspVoice.VOICE_STOP_LEVEL) {
-          voice.fCurNote = FaustWebAudioDspVoice.kFreeVoice;
-        }
+      if (voice.fCurNote === FaustWebAudioDspVoice.kReleaseVoice && voice.fLevel < FaustWebAudioDspVoice.VOICE_STOP_LEVEL) {
+        voice.fCurNote = FaustWebAudioDspVoice.kFreeVoice;
       }
     });
-    if (this.fInstance.effectAPI)
-      this.fInstance.effectAPI.compute(
-        this.fEffect,
-        this.fBufferSize,
-        this.fAudioOutputs,
-        this.fAudioOutputs
-      );
     this.updateOutputs();
+    this.clearNonFinite();
     if (output !== void 0) {
       for (let chan = 0; chan < Math.min(this.getNumOutputs(), output.length); chan++) {
         const dspOutput = this.fOutChannels[chan];
@@ -3680,29 +4365,29 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
     }
   }
   setParamValue(path, value) {
+    const index = this.fPathTable[path];
+    if (index === void 0) return this.warnUnknownPath(path, "ignored");
     if (this.fPlotHandler)
       this.fCachedEvents.push({ type: "param", data: { path, value } });
     if (this.fJSONEffect && _FaustPolyWebAudioDsp.findPath(this.fJSONEffect.ui, path) && this.fInstance.effectAPI) {
-      this.fInstance.effectAPI.setParamValue(
-        this.fEffect,
-        this.fPathTable[path],
-        value
-      );
+      this.fInstance.effectAPI.setParamValue(this.fEffect, index, value);
     } else {
       this.fVoiceTable.forEach(
-        (voice) => voice.setParamValue(this.fPathTable[path], value)
+        (voice) => voice.setParamValue(index, value)
       );
     }
     this.callInputParamHandler(path, this.getParamValue(path));
   }
   getParamValue(path) {
+    const index = this.fPathTable[path];
+    if (index === void 0) {
+      this.warnUnknownPath(path, "returning 0");
+      return 0;
+    }
     if (this.fJSONEffect && _FaustPolyWebAudioDsp.findPath(this.fJSONEffect.ui, path) && this.fInstance.effectAPI) {
-      return this.fInstance.effectAPI.getParamValue(
-        this.fEffect,
-        this.fPathTable[path]
-      );
+      return this.fInstance.effectAPI.getParamValue(this.fEffect, index);
     } else {
-      return this.fVoiceTable[0].getParamValue(this.fPathTable[path]);
+      return this.fVoiceTable[0].getParamValue(index);
     }
   }
   getMeta() {
@@ -3866,6 +4551,12 @@ var FaustOfflineProcessor = class {
   getPlotHandler() {
     return this.fDSPCode.getPlotHandler();
   }
+  setNonFiniteHandler(handler) {
+    this.fDSPCode.setNonFiniteHandler(handler);
+  }
+  getNonFiniteHandler() {
+    return this.fDSPCode.getNonFiniteHandler();
+  }
   getNumInputs() {
     return this.fDSPCode.getNumInputs();
   }
@@ -3909,6 +4600,21 @@ var FaustOfflineProcessor = class {
   }
   getUI() {
     return this.fDSPCode.getUI();
+  }
+  init() {
+    this.fDSPCode.init();
+  }
+  instanceInit() {
+    this.fDSPCode.instanceInit();
+  }
+  instanceClear() {
+    this.fDSPCode.instanceClear();
+  }
+  instanceConstants() {
+    this.fDSPCode.instanceConstants();
+  }
+  instanceResetUserInterface() {
+    this.fDSPCode.instanceResetUserInterface();
   }
   start() {
     this.fDSPCode.start();
@@ -4096,10 +4802,11 @@ var LibFaust_default = LibFaust;
 // src/WavEncoder.ts
 var WavEncoder = class {
   static encode(audioBuffer, options) {
+    var _a;
     const numberOfChannels = audioBuffer.length;
     const length = audioBuffer[0].length;
     const { shared, float } = options;
-    const bitDepth = float ? 32 : options.bitDepth | 0 || 16;
+    const bitDepth = float ? 32 : ((_a = options.bitDepth) != null ? _a : 0) | 0 || 16;
     const byteDepth = bitDepth >> 3;
     const byteLength = length * numberOfChannels * byteDepth;
     const AB = shared ? globalThis.SharedArrayBuffer || globalThis.ArrayBuffer : globalThis.ArrayBuffer;
@@ -4286,6 +4993,10 @@ var WavEncoder_default = WavEncoder;
 
 // src/WavDecoder.ts
 var WavDecoder = class {
+  // ArrayBufferLike, not ArrayBuffer: DataView takes either, and
+  // WavEncoder.encode returns a SharedArrayBuffer under its `shared`
+  // option -- so the encode/decode round trip, which is what
+  // faust2sndfile -in does, could not type-check.
   static decode(buffer, options) {
     const dataView = new DataView(buffer);
     const reader = new Reader(dataView);
@@ -4437,7 +5148,7 @@ var Reader = class {
     const x1 = this.dataView.getUint8(this.pos + 1);
     const x2 = this.dataView.getUint8(this.pos + 2);
     const xx = x0 + (x1 << 8) + (x2 << 16);
-    const data = xx > 8388608 ? xx - 16777216 : xx;
+    const data = xx >= 8388608 ? xx - 16777216 : xx;
     this.pos += 3;
     return data < 0 ? data / 8388608 : data / 8388607;
   }
@@ -4446,7 +5157,7 @@ var Reader = class {
     const x1 = this.dataView.getUint8(this.pos + 1);
     const x2 = this.dataView.getUint8(this.pos + 2);
     const xx = x0 + (x1 << 8) + (x2 << 16);
-    const data = xx > 8388608 ? xx - 16777216 : xx;
+    const data = xx >= 8388608 ? xx - 16777216 : xx;
     this.pos += 3;
     return data / 8388608;
   }
@@ -4511,6 +5222,20 @@ var SoundfileReader = class {
       audioBuffer: new Array(numberOfChannels).fill(null).map((v, i) => audioBuffer.getChannelData(i))
     };
   }
+  static isWaveFile(buffer) {
+    if (buffer.byteLength < 12) return false;
+    const reader = new DataView(buffer);
+    const riff = reader.getUint8(0) === 82 && reader.getUint8(1) === 73 && reader.getUint8(2) === 70 && reader.getUint8(3) === 70;
+    const wave = reader.getUint8(8) === 87 && reader.getUint8(9) === 65 && reader.getUint8(10) === 86 && reader.getUint8(11) === 69;
+    return riff && wave;
+  }
+  static decodeWaveFile(buffer) {
+    const decoded = WavDecoder_default.decode(buffer);
+    return {
+      sampleRate: decoded.sampleRate,
+      audioBuffer: decoded.channelData
+    };
+  }
   /**
    * Extract the URLs from the metadata.
    *
@@ -4522,7 +5247,9 @@ var SoundfileReader = class {
     const callback = (item) => {
       if (item.type === "soundfile") {
         const urls = FaustBaseWebAudioDsp.splitSoundfileNames(item.url);
-        urls.filter((url) => url.trim().length > 0).forEach((url) => soundfiles[url] = null);
+        urls.filter((url) => url.trim().length > 0).forEach(
+          (url) => soundfiles[url] = null
+        );
       }
     };
     FaustBaseWebAudioDsp.parseUI(dspMeta.ui, callback);
@@ -4543,6 +5270,13 @@ var SoundfileReader = class {
         `Failed to load sound file from ${url}: ${response.statusText}`
       );
     const arrayBuffer = await response.arrayBuffer();
+    if (this.isWaveFile(arrayBuffer)) {
+      try {
+        return this.decodeWaveFile(arrayBuffer);
+      } catch (error) {
+        console.error(error);
+      }
+    }
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
     return this.toAudioData(audioBuffer);
   }
@@ -4751,6 +5485,8 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
         this.fInputHandler(e.data.path, e.data.value);
       } else if (e.data.type === "plot" && this.fPlotHandler) {
         this.fPlotHandler(e.data.value, e.data.index, e.data.events);
+      } else if (e.data.type === "nonfinite" && this.fNonFiniteHandler) {
+        this.fNonFiniteHandler();
       }
     };
     // Accelerometer and gyroscope handlers
@@ -4775,6 +5511,7 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
     this.fInputHandler = null;
     this.fComputeHandler = null;
     this.fPlotHandler = null;
+    this.fNonFiniteHandler = null;
     this.fDescriptor = [];
     this.fParamAliases = {};
     this.fInputsItems = [];
@@ -4791,7 +5528,7 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
         registerAlias(item.label);
         if (!item.meta) return;
         item.meta.forEach((meta) => {
-          const { midi, acc, gyr } = meta;
+          const { acc, gyr } = meta;
           if (acc) __privateSet(this, _hasAccInput, true);
           if (gyr) __privateSet(this, _hasGyrInput, true);
         });
@@ -4883,6 +5620,16 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
   getPlotHandler() {
     return this.fPlotHandler;
   }
+  setNonFiniteHandler(handler) {
+    this.fNonFiniteHandler = handler;
+    this.port.postMessage({
+      type: "setNonFiniteHandler",
+      data: !!this.fNonFiniteHandler
+    });
+  }
+  getNonFiniteHandler() {
+    return this.fNonFiniteHandler;
+  }
   setupWamEventHandler() {
     this.port.postMessage({ type: "setupWamEventHandler" });
   }
@@ -4903,32 +5650,44 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
       );
     }
   }
-  midiMessage(data) {
+  /**
+   * `time` is in AudioContext seconds, the clock `AudioParam` methods take.
+   *
+   * With a time, the processor holds the message until the block containing
+   * that instant and applies it on the exact sample. Without one, it is
+   * applied on arrival.
+   *
+   * A time already in the past is late, not rejected: the message happens at
+   * the top of the next block. `setParamValue` is the exception -- it also
+   * writes an `AudioParam`, and `setValueAtTime` throws on a negative time.
+   */
+  midiMessage(data, time) {
     const cmd = data[0] >> 4;
     const channel = data[0] & 15;
     const data1 = data[1];
     const data2 = data[2];
-    if (cmd === 11) this.ctrlChange(channel, data1, data2);
-    else if (cmd === 14) this.pitchWheel(channel, data2 * 128 + data1);
+    if (cmd === 11) this.ctrlChange(channel, data1, data2, time);
+    else if (cmd === 14)
+      this.pitchWheel(channel, data2 * 128 + data1, time);
     if (cmd === 8 || cmd === 9 && data2 === 0)
-      this.keyOff(channel, data1, data2);
-    else if (cmd === 9) this.keyOn(channel, data1, data2);
-    else this.port.postMessage({ type: "midi", data });
+      this.keyOff(channel, data1, data2, time);
+    else if (cmd === 9) this.keyOn(channel, data1, data2, time);
+    else this.port.postMessage({ type: "midi", data, time });
   }
-  ctrlChange(channel, ctrl, value) {
-    const e = { type: "ctrlChange", data: [channel, ctrl, value] };
+  ctrlChange(channel, ctrl, value, time) {
+    const e = { type: "ctrlChange", data: [channel, ctrl, value], time };
     this.port.postMessage(e);
   }
-  pitchWheel(channel, wheel) {
-    const e = { type: "pitchWheel", data: [channel, wheel] };
+  pitchWheel(channel, wheel, time) {
+    const e = { type: "pitchWheel", data: [channel, wheel], time };
     this.port.postMessage(e);
   }
-  keyOn(channel, pitch, velocity) {
-    const e = { type: "keyOn", data: [channel, pitch, velocity] };
+  keyOn(channel, pitch, velocity, time) {
+    const e = { type: "keyOn", data: [channel, pitch, velocity], time };
     this.port.postMessage(e);
   }
-  keyOff(channel, pitch, velocity) {
-    const e = { type: "keyOff", data: [channel, pitch, velocity] };
+  keyOff(channel, pitch, velocity, time) {
+    const e = { type: "keyOff", data: [channel, pitch, velocity], time };
     this.port.postMessage(e);
   }
   get hasAccInput() {
@@ -4951,11 +5710,23 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
       gamma
     });
   }
-  setParamValue(path, value) {
+  /**
+   * `time` is in AudioContext seconds; see `midiMessage`.
+   *
+   * Unlike a note, a negative `time` throws instead of arriving late, and
+   * nothing is sent. `AudioParam.setValueAtTime` is what rejects it, which
+   * is why that call comes first.
+   */
+  setParamValue(path, value, time) {
     const resolved = this.fParamAliases[path] || path;
-    this.port.postMessage({ type: "param", data: { path: resolved, value } });
     const param = this.parameters.get(resolved);
-    if (param) param.setValueAtTime(value, this.context.currentTime);
+    if (param)
+      param.setValueAtTime(value, time != null ? time : this.context.currentTime);
+    this.port.postMessage({
+      type: "param",
+      data: { path: resolved, value },
+      time
+    });
   }
   getParamValue(path) {
     const resolved = this.fParamAliases[path] || path;
@@ -4976,6 +5747,21 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
   }
   getDescriptors() {
     return this.fDescriptor;
+  }
+  init() {
+    this.port.postMessage({ type: "init" });
+  }
+  instanceInit() {
+    this.port.postMessage({ type: "instanceInit" });
+  }
+  instanceClear() {
+    this.port.postMessage({ type: "instanceClear" });
+  }
+  instanceConstants() {
+    this.port.postMessage({ type: "instanceConstants" });
+  }
+  instanceResetUserInterface() {
+    this.port.postMessage({ type: "instanceResetUserInterface" });
   }
   start() {
     this.port.postMessage({ type: "start" });
@@ -5020,14 +5806,8 @@ var FaustPolyAudioWorkletNode = class extends FaustAudioWorkletNode {
     }
   }
   // Public API
-  keyOn(channel, pitch, velocity) {
-    const e = { type: "keyOn", data: [channel, pitch, velocity] };
-    this.port.postMessage(e);
-  }
-  keyOff(channel, pitch, velocity) {
-    const e = { type: "keyOff", data: [channel, pitch, velocity] };
-    this.port.postMessage(e);
-  }
+  // `keyOn` and `keyOff` are inherited: the base posts the same message,
+  // which the processor routes to the polyphonic DSP.
   allNotesOff(hard) {
     const e = { type: "ctrlChange", data: [0, 123, 0] };
     this.port.postMessage(e);
@@ -5073,7 +5853,7 @@ var FaustScriptProcessorNode = class extends (globalThis.ScriptProcessorNode || 
     this.handleDeviceMotion = void 0;
     this.handleDeviceOrientation = void 0;
   }
-  init(instance) {
+  setupNode(instance) {
     this.fDSPCode = instance;
     this.fInputs = new Array(this.fDSPCode.getNumInputs());
     this.fOutputs = new Array(this.fDSPCode.getNumOutputs());
@@ -5102,6 +5882,21 @@ var FaustScriptProcessorNode = class extends (globalThis.ScriptProcessorNode || 
       return this.fDSPCode.compute(this.fInputs, this.fOutputs);
     };
     this.start();
+  }
+  init() {
+    this.fDSPCode.init();
+  }
+  instanceInit() {
+    this.fDSPCode.instanceInit();
+  }
+  instanceClear() {
+    this.fDSPCode.instanceClear();
+  }
+  instanceConstants() {
+    this.fDSPCode.instanceConstants();
+  }
+  instanceResetUserInterface() {
+    this.fDSPCode.instanceResetUserInterface();
   }
   // Public API
   /** Start accelerometer and gyroscope handlers */
@@ -5178,6 +5973,12 @@ var FaustScriptProcessorNode = class extends (globalThis.ScriptProcessorNode || 
   }
   getPlotHandler() {
     return this.fDSPCode.getPlotHandler();
+  }
+  setNonFiniteHandler(handler) {
+    this.fDSPCode.setNonFiniteHandler(handler);
+  }
+  getNonFiniteHandler() {
+    return this.fDSPCode.getNonFiniteHandler();
   }
   getNumInputs() {
     return this.fDSPCode.getNumInputs();
@@ -5320,7 +6121,7 @@ var _FaustMonoDspGenerator = class _FaustMonoDspGenerator {
         monoDsp.getNumOutputs()
       );
       Object.setPrototypeOf(sp2, FaustMonoScriptProcessorNode.prototype);
-      sp2.init(monoDsp);
+      sp2.setupNode(monoDsp);
       return sp2;
     } else {
       if (!_FaustMonoDspGenerator.gWorkletProcessors.has(context))
@@ -5329,15 +6130,14 @@ var _FaustMonoDspGenerator = class _FaustMonoDspGenerator {
           /* @__PURE__ */ new Set()
         );
       if (!((_a = _FaustMonoDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _a.has(processorName))) {
-        try {
-          const processorCode = `
+        const processorCode = `
 // DSP name and JSON string for DSP are generated
 const faustData = ${JSON.stringify({
-            processorName,
-            dspName: name,
-            dspMeta: meta,
-            poly: false
-          })};
+          processorName,
+          dspName: name,
+          dspMeta: meta,
+          poly: false
+        })};
 // Implementation needed classes of functions
 var ${FaustDspInstance.name} = ${FaustDspInstance.toString()}
 var FaustDspInstance = ${FaustDspInstance.name};
@@ -5367,14 +6167,11 @@ const dependencies = {
 // Generate the actual AudioWorkletProcessor code
 (${FaustAudioWorkletProcessor_default.toString()})(dependencies, faustData);
 `;
-          const url = URL.createObjectURL(
-            new Blob([processorCode], { type: "text/javascript" })
-          );
-          await context.audioWorklet.addModule(url);
-          (_b = _FaustMonoDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _b.add(processorName);
-        } catch (e) {
-          throw e;
-        }
+        const url = URL.createObjectURL(
+          new Blob([processorCode], { type: "text/javascript" })
+        );
+        await context.audioWorklet.addModule(url);
+        (_b = _FaustMonoDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _b.add(processorName);
       }
       const node = new FaustMonoAudioWorkletNode(context, {
         processorOptions: {
@@ -5403,15 +6200,14 @@ const dependencies = {
     if (!_FaustMonoDspGenerator.gWorkletProcessors.has(context))
       _FaustMonoDspGenerator.gWorkletProcessors.set(context, /* @__PURE__ */ new Set());
     if (!((_a = _FaustMonoDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _a.has(processorName))) {
-      try {
-        const processorCode = `
+      const processorCode = `
 // DSP name and JSON string for DSP are generated
 const faustData = ${JSON.stringify({
-          processorName,
-          dspName: name,
-          dspMeta: meta,
-          fftOptions
-        })};
+        processorName,
+        dspName: name,
+        dspMeta: meta,
+        fftOptions
+      })};
 // Implementation needed classes of functions
 var ${FaustDspInstance.name} = ${FaustDspInstance.toString()}
 var FaustDspInstance = ${FaustDspInstance.name};
@@ -5443,14 +6239,11 @@ const dependencies = {
 // Generate the actual AudioWorkletProcessor code
 (${FaustFFTAudioWorkletProcessor_default.toString()})(dependencies, faustData);
 `;
-        const url = URL.createObjectURL(
-          new Blob([processorCode], { type: "text/javascript" })
-        );
-        await context.audioWorklet.addModule(url);
-        (_b = _FaustMonoDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _b.add(processorName);
-      } catch (e) {
-        throw e;
-      }
+      const url = URL.createObjectURL(
+        new Blob([processorCode], { type: "text/javascript" })
+      );
+      await context.audioWorklet.addModule(url);
+      (_b = _FaustMonoDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _b.add(processorName);
     }
     const node = new FaustMonoAudioWorkletNode(context, {
       channelCount: Math.max(1, Math.ceil(meta.inputs / 3)),
@@ -5494,21 +6287,17 @@ const dependencies = {
       FaustPolyWebAudioDsp: void 0,
       FaustWebAudioDspVoice: void 0
     };
-    try {
-      const faustData = {
-        processorName,
-        dspName: name,
-        dspMeta: meta,
-        poly: false
-      };
-      const Processor = FaustAudioWorkletProcessor_default(
-        dependencies,
-        faustData
-      );
-      return Processor;
-    } catch (e) {
-      throw e;
-    }
+    const faustData = {
+      processorName,
+      dspName: name,
+      dspMeta: meta,
+      poly: false
+    };
+    const Processor = FaustAudioWorkletProcessor_default(
+      dependencies,
+      faustData
+    );
+    return Processor;
   }
   async createOfflineProcessor(sampleRate, bufferSize, factory = this.factory, context) {
     if (!factory)
@@ -5563,42 +6352,38 @@ var _FaustPolyDspGenerator = class _FaustPolyDspGenerator {
       );
       if (this.effectFactory) {
         const effectJSON = JSON.parse(this.effectFactory.json);
-        const dspCode = `// Voice output is forced to 2, when DSP is stereo or effect has 2 ins or 2 outs,
-// so that the effect can process the 2 channels of the voice
-adaptOut(1,1,1) = _;
-adaptOut(1,1,2) = _ <: _,0;  // The left channel only is kept
-adaptOut(1,2,1) = _ <: _,_;
-adaptOut(1,2,2) = _ <: _,_;
-adaptOut(2,1,1) = _,_;
-adaptOut(2,1,2) = _,_;
-adaptOut(2,2,1) = _,_;
-adaptOut(2,2,2) = _,_;
-adaptor(F) = adaptOut(outputs(F),${effectJSON.inputs},${effectJSON.outputs});
+        const ins = effectJSON.inputs;
+        const outs = effectJSON.outputs;
+        const adaptors = `bus(n) = par(i,n,_);
+pad(n,w) = bus(n), par(i,w-n,0);
+width(F) = max(outputs(F), max(${ins},${outs}));
+adapt(1,n,m) = bus(n) <: bus(m);
+adapt(0,n,m) = bus(n) :> bus(m);
+// n channels to w: split when the effect takes w inputs, padded with silent channels otherwise
+widen(1,d,n,w) = bus(n);
+widen(0,1,n,w) = adapt(1,n,w);
+widen(0,0,n,w) = pad(n,w);
+// the voice's n channels out of the w of the buffers, the silent ones dropped
+real(1,n,w) = bus(n);
+real(0,n,w) = bus(n), par(i,w-n,!);
+// the w channels to the effect's e inputs: the voice's own channels adapted to them
+narrow(1,n,w,e) = bus(w);
+narrow(0,n,w,e) = real(n == w, n, w) : adapt(n <= e, n, e);
+`;
+        const dspCode = `${adaptors}
+adaptor(F) = widen(outputs(F) == width(F), ${ins} == width(F), outputs(F), width(F));
 dsp_code = environment{
     ${dspCodeAux}
 };
 process = dsp_code.process : adaptor(dsp_code.process);
 `;
-        const effectCode = `// Inputs
-adaptIn(1,1,1) = _;
-adaptIn(1,1,2) = _,_ :> _;  
-adaptIn(1,2,1) = _,_;
-adaptIn(1,2,2) = _,_;
-adaptIn(2,1,1) = _,_ :> _;
-adaptIn(2,1,2) = _,_ :> _;
-adaptIn(2,2,1) = _,_;
-adaptIn(2,2,2) = _,_;
-// Outputs
-adaptOut(1,1) = _ <: _,0;   // The left channel only is kept
-adaptOut(1,2) = _,_;
-adaptOut(2,1) = _ <: _,0;   // The left channel only is kept
-adaptOut(2,2) = _,_;
-adaptorIns(F) = adaptIn(outputs(F),${effectJSON.inputs},${effectJSON.outputs});
-adaptorOuts = adaptOut(${effectJSON.inputs},${effectJSON.outputs});
+        const effectCode = `${adaptors}
+adaptorIns(F) = narrow(width(F) == ${ins}, outputs(F), width(F), ${ins});
+adaptorOuts(F) = widen(${outs} == width(F), 0, ${outs}, width(F));
 dsp_code = environment{
     ${dspCodeAux}
 };
-process = adaptorIns(dsp_code.process) : dsp_code.effect : adaptorOuts;
+process = adaptorIns(dsp_code.process) : dsp_code.effect : adaptorOuts(dsp_code.process);
 `;
         this.voiceFactory = await compiler.createPolyDSPFactory(
           name,
@@ -5613,6 +6398,12 @@ process = adaptorIns(dsp_code.process) : dsp_code.effect : adaptorOuts;
           );
         } catch (e) {
           console.warn(e);
+          this.effectFactory = null;
+          this.voiceFactory = await compiler.createPolyDSPFactory(
+            name,
+            dspCodeAux,
+            args
+          );
         }
       }
     } catch (e) {
@@ -5620,6 +6411,7 @@ process = adaptorIns(dsp_code.process) : dsp_code.effect : adaptorOuts;
       if (!errorMessage.includes("undefined symbol : effect")) {
         console.warn(e);
       }
+      this.effectFactory = null;
       this.voiceFactory = await compiler.createPolyDSPFactory(
         name,
         dspCodeAux,
@@ -5704,7 +6496,7 @@ process = adaptorIns(dsp_code.process) : dsp_code.effect : adaptorOuts;
         polyDsp.getNumOutputs()
       );
       Object.setPrototypeOf(sp2, FaustPolyScriptProcessorNode.prototype);
-      sp2.init(polyDsp);
+      sp2.setupNode(polyDsp);
       return sp2;
     } else {
       if (!_FaustPolyDspGenerator.gWorkletProcessors.has(context))
@@ -5713,16 +6505,15 @@ process = adaptorIns(dsp_code.process) : dsp_code.effect : adaptorOuts;
           /* @__PURE__ */ new Set()
         );
       if (!((_a = _FaustPolyDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _a.has(processorName))) {
-        try {
-          const processorCode = `
+        const processorCode = `
 // DSP name and JSON string for DSP are generated
 const faustData = ${JSON.stringify({
-            processorName,
-            dspName: name,
-            dspMeta: voiceMeta,
-            poly: true,
-            effectMeta
-          })};
+          processorName,
+          dspName: name,
+          dspMeta: voiceMeta,
+          poly: true,
+          effectMeta
+        })};
 // Implementation needed classes of functions
 var ${FaustDspInstance.name} = ${FaustDspInstance.toString()}
 var FaustDspInstance = ${FaustDspInstance.name};
@@ -5754,26 +6545,30 @@ const dependencies = {
 // Generate the actual AudioWorkletProcessor code
 (${FaustAudioWorkletProcessor_default.toString()})(dependencies, faustData);
 `;
-          const url = URL.createObjectURL(
-            new Blob([processorCode], { type: "text/javascript" })
-          );
-          await context.audioWorklet.addModule(url);
-          (_b = _FaustPolyDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _b.add(processorName);
-        } catch (e) {
-          throw e;
-        }
+        const url = URL.createObjectURL(
+          new Blob([processorCode], { type: "text/javascript" })
+        );
+        await context.audioWorklet.addModule(url);
+        (_b = _FaustPolyDspGenerator.gWorkletProcessors.get(context)) == null ? void 0 : _b.add(processorName);
       }
-      const node = new FaustPolyAudioWorkletNode(context, {
-        processorOptions: {
-          name: processorName,
-          voiceFactory,
-          mixerModule,
-          voices,
-          sampleSize,
-          effectFactory: effectFactory || void 0,
-          ...processorOptions
-        }
-      });
+      let node;
+      try {
+        node = new FaustPolyAudioWorkletNode(context, {
+          processorOptions: {
+            name: processorName,
+            voiceFactory,
+            mixerModule,
+            voices,
+            sampleSize,
+            effectFactory: effectFactory || void 0,
+            ...processorOptions
+          }
+        });
+      } catch (error) {
+        throw new Error(
+          `Faust: the AudioWorkletProcessor "${processorName}" did not register. The module loaded, so the failure happened inside registerProcessor \u2014 its error is reported in the AudioWorklet scope and appears in the browser console above this one. A duplicate control path shared between \`process\` and \`effect\` is the usual cause. Original error: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
       return node;
     }
   }
@@ -5784,31 +6579,26 @@ const dependencies = {
       );
     const voiceMeta = JSON.parse(voiceFactory.json);
     const effectMeta = effectFactory ? JSON.parse(effectFactory.json) : void 0;
-    const sampleSize = voiceMeta.compile_options.match("-double") ? 8 : 4;
-    try {
-      const dependencies = {
-        FaustBaseWebAudioDsp,
-        FaustMonoWebAudioDsp: void 0,
-        FaustWasmInstantiator: FaustWasmInstantiator_default,
-        FaustPolyWebAudioDsp,
-        FaustWebAudioDspVoice,
-        FaustAudioWorkletProcessorCommunicator
-      };
-      const faustData = {
-        processorName,
-        dspName: name,
-        dspMeta: voiceMeta,
-        poly: true,
-        effectMeta
-      };
-      const Processor = FaustAudioWorkletProcessor_default(
-        dependencies,
-        faustData
-      );
-      return Processor;
-    } catch (e) {
-      throw e;
-    }
+    const dependencies = {
+      FaustBaseWebAudioDsp,
+      FaustMonoWebAudioDsp: void 0,
+      FaustWasmInstantiator: FaustWasmInstantiator_default,
+      FaustPolyWebAudioDsp,
+      FaustWebAudioDspVoice,
+      FaustAudioWorkletProcessorCommunicator
+    };
+    const faustData = {
+      processorName,
+      dspName: name,
+      dspMeta: voiceMeta,
+      poly: true,
+      effectMeta
+    };
+    const Processor = FaustAudioWorkletProcessor_default(
+      dependencies,
+      faustData
+    );
+    return Processor;
   }
   async createOfflineProcessor(sampleRate, bufferSize, voices, voiceFactory = this.voiceFactory, mixerModule = this.mixerModule, effectFactory = this.effectFactory, context) {
     if (!voiceFactory)
