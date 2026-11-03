@@ -130,6 +130,9 @@ The webapp recognises these query strings :
 - `?link=modular` — this window edits the modules of the
   [faustmodular](https://github.com/orlarey/faustmodular) (formerly FaustPlayground)
   page that opened it (see below).
+- `?faustmodular=<url>` — the faustmodular that the faustmodular button
+  opens (default `https://orlarey.github.io/faustmodular/` ; a local one,
+  tests).
 
 ## Edit faustmodular modules
 
@@ -143,10 +146,19 @@ on, the slider values and the connections are kept. A code with errors
 stays in faustcode, with its errors ; the module keeps playing its last
 valid version.
 
+The other way, the **faustmodular** button of the header opens the
+session in faustmodular, as a module of its open document : faustmodular
+is opened if needed (`?link=faustcode`, a window reused), or the
+faustmodular that opened faustcode is used. The session is then linked
+to the module : each save that compiles updates it, as above, and the
+button sends the new code of a linked session to its module instead of
+adding another one.
+
 The two pages talk with `postMessage` (they may have different
-origins) ; faustcode only accepts messages from the window that opened
-it. Protocol and behaviour : `spec_playground_link.md` and
-`webapp/playground-link.js`.
+origins) ; faustcode only accepts messages from the faustmodular window
+(the one that opened it, or the one it opened), and faustmodular only
+takes code from the official faustcode, or a local one. Protocol and
+behaviour : `spec_playground_link.md` and `webapp/playground-link.js`.
 
 ## What's inside
 

@@ -2,9 +2,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  FAUSTMODULAR_URL,
   LINK_PROTOCOL,
   LinkTable,
+  faustmodularUrl,
   isPlaygroundLink,
+  modularOpenUrl,
+  moduleName,
   parseLinkMessage,
   sessionFilename,
 } from './playground-link.js';
@@ -73,4 +77,34 @@ test('keeps several modules apart, and forgets a removed one', () => {
   assert.equal(t.get('a1'), null);
   assert.equal(t.get('b1').id, 'm2');
   assert.equal(t.unlink('m1'), null);
+});
+
+test('the other way : faustmodular says hello, then tells what it imported', () => {
+  assert.ok(parseLinkMessage({ type: 'faustcode-link-hello', protocol: LINK_PROTOCOL }));
+  assert.ok(parseLinkMessage({ type: 'faustcode-link-hello', protocol: LINK_PROTOCOL, libfaust: '2.90.19' }));
+  const imported = { type: 'faustcode-link-imported', protocol: LINK_PROTOCOL, ref: 'abc', ok: true, id: 'm1', name: 'Echo' };
+  assert.deepEqual(parseLinkMessage(imported), imported);
+  assert.equal(parseLinkMessage({ ...imported, id: undefined }), null);       // imported : its id
+  assert.equal(parseLinkMessage({ ...imported, ok: undefined }), null);
+  assert.equal(parseLinkMessage({ ...imported, ref: 1 }), null);
+  assert.ok(parseLinkMessage({ type: 'faustcode-link-imported', protocol: LINK_PROTOCOL, ref: 'abc', ok: false, error: 'x' }));
+  // ours, not faustmodular's
+  assert.equal(parseLinkMessage({ type: 'faustcode-link-import', protocol: LINK_PROTOCOL, ref: 'abc', name: 'E', code: 'process = _;' }), null);
+});
+
+test('opens faustmodular at its URL, with ?link=faustcode, and says where a local faustcode is', () => {
+  assert.equal(faustmodularUrl(''), FAUSTMODULAR_URL);
+  assert.equal(faustmodularUrl('?faustmodular=http://localhost:5173/'), 'http://localhost:5173/');
+  assert.equal(faustmodularUrl('?faustmodular=javascript:alert(1)'), FAUSTMODULAR_URL);
+  // the official faustcode : faustmodular trusts its origin
+  assert.equal(modularOpenUrl(FAUSTMODULAR_URL, 'https://orlarey.github.io/faustcode/?x=1'), FAUSTMODULAR_URL + '?link=faustcode');
+  // a local one : its URL is given (faustmodular trusts a local faustcode only)
+  assert.equal(modularOpenUrl('http://localhost:5173/', 'http://127.0.0.1:8000/webapp/'),
+    'http://localhost:5173/?link=faustcode&faustcode=http%3A%2F%2F127.0.0.1%3A8000%2Fwebapp%2F');
+});
+
+test('names the module after the session', () => {
+  assert.equal(moduleName('Echo.dsp'), 'Echo');
+  assert.equal(moduleName('Echo'), 'Echo');
+  assert.equal(moduleName(''), 'module');
 });

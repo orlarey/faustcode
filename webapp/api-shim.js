@@ -426,7 +426,7 @@ async function handleVersion() {
 }
 
 function handleAppVersion() {
-  return ok({ version: '0.14.0' });
+  return ok({ version: '0.15.0' });
 }
 
 function handleFaustHelp() {

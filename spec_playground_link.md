@@ -22,6 +22,10 @@ language: fr
 FaustPlayground (étendu) s'appelle désormais **faustmodular** (version 2.10.0). Il ouvre faustcode avec `?link=modular`, dans une fenêtre nommée `faustcode-modular` ; `?link=playground` reste accepté. Le protocole de messages est inchangé. L'éditeur intégré du playground a été supprimé en 2.9.0 : faustcode est son seul éditeur.
 :::
 
+::: note [Mise à jour du 3 novembre 2026 : dans l'autre sens]
+faustcode 0.15.0 et faustmodular 3.27.0 : le bouton **faustmodular** de l'en-tête de faustcode ouvre la session dans faustmodular, comme un module de son document ouvert, lié à la session (section « Dans l'autre sens »).
+:::
+
 # Objet
 
 L'éditeur intégré de FaustPlayground est une simple zone de texte : ni coloration, ni numéros de ligne, et une erreur de compilation vidait le module. faustcode a tout ce qui manque (CodeMirror, complétion, erreurs à la ligne, diagramme, oscilloscope, spectre, documentation, MCP). Le crayon d'un module du playground ouvre donc son code dans faustcode, et chaque sauvegarde qui compile met le module à jour en place.
@@ -57,6 +61,21 @@ Le playground ouvre faustcode avec `?link=playground` dans une fenêtre nommée 
 - L'URL de faustcode est `https://orlarey.github.io/faustcode/`, modifiable par le paramètre `?faustcode=<url>` du playground (faustcode local, tests).
 - Le bouton `</>` ouvre l'éditeur intégré, qui reste disponible sans faustcode.
 
+# Dans l'autre sens
+
+Le bouton **faustmodular** de l'en-tête de faustcode ouvre la session affichée dans faustmodular.
+
+| Sens | `type` | Champs | Rôle |
+| :-- | :-- | :-- | :-- |
+| faustmodular → faustcode | `faustcode-link-hello` | `libfaust?` | ouvert par faustcode, document ouvert prêt ; faustcode répond par `faustcode-link-ready` |
+| faustcode → faustmodular | `faustcode-link-import` | `ref`, `name`, `code` | ajouter ce code comme module |
+| faustmodular → faustcode | `faustcode-link-imported` | `ref`, `ok`, `id?`, `name?`, `error?` | module ajouté (son `id`), ou la raison du refus |
+
+- **Ouverture.** faustcode ouvre faustmodular (`https://orlarey.github.io/faustmodular/`, modifiable par `?faustmodular=<url>`) avec `?link=faustcode`, dans une fenêtre nommée `faustmodular-faustcode`, réutilisée. Si faustcode a été ouvert par faustmodular, la session va à cette fenêtre. Sans réponse au bout de 30 s, une notice l'indique.
+- **Module.** faustmodular compile le code, dans le groupe du module nommé d'après la session (`Echo.dsp` → `Echo`), et l'ajoute au centre de la vue du document ouvert. Un code avec erreurs n'ajoute rien : l'erreur revient à faustcode.
+- **Lien.** `ref` est le sha1 de la session : une fois le module ajouté, la session lui est liée comme une session ouverte par le crayon. Chaque sauvegarde qui compile met le module à jour (`faustcode-link-code`), et le crayon du module l'édite dans la même fenêtre faustcode. Un nouveau clic sur le bouton pour une session liée envoie son code au module au lieu d'en ajouter un autre.
+- **Origines.** faustcode n'accepte que les messages de la fenêtre faustmodular, avec l'origine de son URL. faustmodular n'accepte ce sens que de la page qui l'a ouvert (`window.opener`), avec l'origine du faustcode officiel ; un `?faustcode=<url>` n'y est accepté que vers localhost : sinon une page d'un autre site pourrait ouvrir faustmodular et ajouter des modules au document ouvert. Un faustcode local passe donc son URL à faustmodular, le faustcode officiel non.
+
 # Implémentation
 
 - faustcode : `webapp/playground-link.js` (protocole, table des liens, partie testée par `node --test`), branché dans `webapp/boot.js` ; `announceSubmit` dans `webapp/api-shim.js` et `webapp/handlers.js` ; `probeTabs` extrait de `webapp/tab-handoff.js`.
@@ -66,9 +85,9 @@ Le playground ouvre faustcode avec `?link=playground` dans une fenêtre nommée 
 
 - Les liens ne survivent pas à un rechargement de la fenêtre faustcode : un nouveau clic sur le crayon les rétablit.
 - faustcode joue aussi le module s'il est affiché en vue Run ; la vue dsp ne produit pas de son.
-- Pas de synchronisation dans l'autre sens (un code déposé sur le module dans le playground ne met pas à jour la session faustcode).
+- Un code déposé sur le module dans faustmodular ne met pas à jour la session faustcode.
 
 # Critères d'acceptation
 
-- `webapp/playground-link.test.mjs` : reconnaissance de l'URL, noms de session, validation des messages, suivi des sessions sauvegardées, plusieurs modules, oubli d'un module supprimé.
-- Tests de bout en bout du playground (`tests/e2e/code-editing.test.ts`) : avec un faux faustcode (messages, origines, refus, fenêtre réutilisée, suppression) et avec ce dépôt servi en local (`FAUSTCODE_DIR`) : Ctrl-S dans CodeMirror met le module à jour, une erreur reste dans faustcode.
+- `webapp/playground-link.test.mjs` : reconnaissance de l'URL, noms de session, validation des messages (dont `hello` et `imported`), suivi des sessions sauvegardées, plusieurs modules, oubli d'un module supprimé, URL de faustmodular, nom du module.
+- Tests de bout en bout du playground (`tests/e2e/code-editing.test.ts`) : avec un faux faustcode (messages, origines, refus, fenêtre réutilisée, suppression) et avec ce dépôt servi en local (`FAUSTCODE_DIR`) : Ctrl-S dans CodeMirror met le module à jour, une erreur reste dans faustcode ; le bouton faustmodular ajoute la session comme module, puis Ctrl-S le met à jour. Dans l'autre sens avec un faux faustcode : hello, import, mise à jour, crayon vers le faustcode ouvreur, erreur de compilation, refus d'une page d'un autre site.

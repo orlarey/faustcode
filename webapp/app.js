@@ -24,6 +24,7 @@ import {
   setPlaybackAudioSession,
 } from './play-gate.js';
 import { openShareDialog } from './share-ui.js';
+import { OPEN_IN_MODULAR_EVENT } from './playground-link.js';
 import { showNotice } from './notice.js';
 import { clearAllDrafts } from './drafts.js';
 
@@ -46,6 +47,7 @@ const refreshSessionBtn = document.getElementById('refresh-session');
 const editSessionBtn = document.getElementById('edit-session');
 const archiveBtn = document.getElementById('archive-btn');
 const shareBtn = document.getElementById('share-btn');
+const modularBtn = document.getElementById('modular-btn');
 const audioGate = document.getElementById('audio-gate');
 const audioGateButton = document.getElementById('audio-gate-button');
 const audioGateStatus = document.getElementById('audio-gate-status');
@@ -1020,6 +1022,7 @@ function updateSessionNavigation() {
     sessionNext.disabled = currentDisplayPos <= 0;
     if (deleteSessionBtn) deleteSessionBtn.classList.add('hidden');
     if (shareBtn) shareBtn.disabled = true;
+    if (modularBtn) modularBtn.disabled = true;
     if (refreshSessionBtn) refreshSessionBtn.classList.add('hidden');
     if (editSessionBtn) editSessionBtn.classList.add('hidden');
   } else {
@@ -1036,6 +1039,7 @@ function updateSessionNavigation() {
     sessionNext.disabled = currentDisplayPos <= 0;
     if (deleteSessionBtn) deleteSessionBtn.classList.remove('hidden');
     if (shareBtn) shareBtn.disabled = isLive;
+    if (modularBtn) modularBtn.disabled = isLive;
     if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
     if (editSessionBtn) {
       if (isLive) {
@@ -1558,6 +1562,25 @@ if (shareBtn) {
       });
     } catch (err) {
       showError(`Share failed: ${err.message}`);
+    }
+  });
+}
+
+// The session opened in faustmodular, as a module of its open document
+// (playground-link.js : added, or updated when it is linked to a module).
+if (modularBtn) {
+  modularBtn.addEventListener('click', async () => {
+    const session = getCurrentSession();
+    if (!session || !state.currentSha) return;
+    try {
+      const response = await fetch(`/api/${state.currentSha}/user_code.dsp`);
+      if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
+      const code = await response.text();
+      document.dispatchEvent(new CustomEvent(OPEN_IN_MODULAR_EVENT, {
+        detail: { sha1: state.currentSha, code, filename: session.filename },
+      }));
+    } catch (err) {
+      showError(`faustmodular: ${err.message}`);
     }
   });
 }
