@@ -32,6 +32,8 @@ import { initSetupMcp } from './setup-mcp.js';
 import * as floatingEditor from './floating-editor.js';
 import {
   SHARE_PARAMS,
+  SHARE_VIEWS,
+  SHARE_POLY,
   decodeShareParams,
   stripShareParams,
   setShareIntent,
@@ -40,12 +42,14 @@ import { tryHandOff, installHandoffResponder, probeTabs } from './tab-handoff.js
 import { installPlaygroundLink, isPlaygroundLink } from './playground-link.js';
 import { showNotice } from './notice.js';
 import { initFiles, codeSha1, getOpen, nameForSession } from './files.js';
+import { openStoreFile, storeErrorText, startStores, stores } from './stores-ui.js';
+import { storeLink, withoutStoreLink } from './vendor/fauststore/fauststore.js';
 import { writeIfHandle, hasFileAccess } from './disk-files.js';
 // Install the live mirror bus on window.__faustEditorBus before any
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
 
-const WEBAPP_VERSION = '0.16.0';
+const WEBAPP_VERSION = '0.17.0';
 
 // 1. Synchronously install the fetch shim BEFORE any view code runs.
 installApiShim();
@@ -351,10 +355,49 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     }
   }
 
+  // A link to a file of GitHub (spec_files_store.md, « Les liens ») :
+  // ?file=<its address on GitHub> or ?store=<owner>/<repo>&file=<path>[&ref=…]
+  // opens it as a file (linked to the store when the repository is one) ;
+  // ?store=<owner>/<repo> alone follows the store and shows its modules. The
+  // link leaves the address (mcp and token kept).
+  const fileLink = storeLink(location.search, 'file');
+  let storeToShow = null;
+  if (fileLink) {
+    startStores();
+    const view = SHARE_VIEWS.includes(bootParams.get('view')) ? bootParams.get('view') : 'run';
+    const poly = SHARE_POLY.includes(Number(bootParams.get('poly'))) ? Number(bootParams.get('poly')) : 0;
+    const clean = new URL(withoutStoreLink(location.href, 'file'), location.href);
+    clean.searchParams.delete('view');
+    clean.searchParams.delete('poly');
+    history.replaceState(history.state, '', clean.pathname + clean.search + clean.hash);
+    if (fileLink.scene) {
+      preloadFaust();
+      try {
+        const result = await openStoreFile({ store: fileLink.store, path: fileLink.scene });
+        if (result.errors && String(result.errors).trim()) {
+          setShareIntent({ error: `${result.name} does not compile :\n${result.errors}` });
+        } else {
+          setShareIntent({ sha1: result.sha1, view, poly });
+          appendLog('info', `file link : ${fileLink.store} ${fileLink.scene} (${result.sha1.slice(0, 8)})`);
+        }
+      } catch (err) {
+        setShareIntent({ error: `${fileLink.scene} : ${err && err.reason ? storeErrorText(err) : String(err && err.message ? err.message : err)}` });
+        appendLog('warn', 'file link ignored :', String(err && err.message ? err.message : err));
+      }
+    } else {
+      storeToShow = fileLink.store;
+      stores.follow(fileLink.store).catch((err) => {
+        storeToShow = null;
+        setShareIntent({ error: `${fileLink.store} : ${storeErrorText(err)}` });
+      });
+    }
+  }
+
   // Load the original app.js (symlinked to ../public/app.js). The ?v=
   // cache buster forces Chrome to bypass its module map, which would
   // otherwise keep a stale module entry across reloads.
-  await import(`./app.js?v=${Date.now()}`);
+  const appModule = await import(`./app.js?v=${Date.now()}`);
+  if (storeToShow && appModule.showStoreAfterGate) appModule.showStoreAfterGate(storeToShow.replace(/@HEAD$/, ''));
 
   // Floating editor : intercept the header pencil icon, drive it via
   // a /api/submit + /api/state round-trip, and keep the buffer in sync

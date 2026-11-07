@@ -859,3 +859,201 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
 .file-picker-trash-empty:hover {
   background: rgba(255, 90, 90, 0.14);
 }
+
+/* The stores (spec_files_store.md, « Les magasins ») : Stores… and the modules of a store. */
+.store-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2600;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 72px 16px 16px;
+}
+
+.store-panel {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 100px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(147, 200, 220, 0.35);
+  border-radius: 12px;
+  background: #0a1118;
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.55);
+  color: #d3e6ee;
+}
+
+.store-panel.wide {
+  width: min(680px, 100%);
+}
+
+.store-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid rgba(147, 200, 220, 0.2);
+}
+
+.store-panel-head h2 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.store-panel-body {
+  padding: 0.7rem 0.8rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.store-follow {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.store-follow-input,
+.store-search {
+  flex: 1;
+  border: 1px solid rgba(147, 200, 220, 0.35);
+  background: #111a26;
+  color: #d3e6ee;
+  border-radius: 999px;
+  padding: 0.38rem 0.7rem;
+  font-size: 0.76rem;
+  outline: none;
+}
+
+.store-follow-input:focus,
+.store-search:focus {
+  box-shadow: var(--ui-focus-shadow);
+}
+
+.store-follow-status {
+  font-size: 0.72rem;
+  color: #9ff1c9;
+  min-height: 1em;
+}
+
+.store-follow-status.error {
+  color: #ff9c9c;
+}
+
+.store-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto auto;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0;
+}
+
+.store-row-main,
+.store-module {
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #d3e6ee;
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.store-row-main:hover:not(:disabled),
+.store-module:hover {
+  background: rgba(147, 200, 220, 0.15);
+}
+
+.store-row-main:disabled {
+  cursor: default;
+}
+
+.store-row-name,
+.store-module-name {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.store-row-meta,
+.store-module-summary,
+.store-module-meta {
+  font-size: 0.68rem;
+  color: #9fb3bb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.store-module-meta {
+  color: #7f949c;
+}
+
+.store-badge {
+  font-size: 0.64rem;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  border: 1px solid rgba(147, 200, 220, 0.3);
+  color: #b9d3dc;
+  white-space: nowrap;
+}
+
+.store-badge.write {
+  border-color: rgba(110, 255, 194, 0.45);
+  color: #9ff1c9;
+}
+
+.store-badge.error {
+  border-color: rgba(255, 170, 90, 0.5);
+  color: #ffc58a;
+}
+
+.store-empty {
+  padding: 0.6rem 0.5rem;
+  font-size: 0.74rem;
+  color: #9fb3bb;
+}
+
+.store-panel-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.68rem;
+  color: #7f949c;
+  line-height: 1.45;
+}
+
+.store-modules {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Share : the link of the store, or the link with the code. */
+.share-kind {
+  display: inline-flex;
+  align-self: center;
+  border: 1px solid rgba(147, 200, 220, 0.28);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.share-kind-btn {
+  border: 0;
+  background: transparent;
+  color: #a9c0c9;
+  font-size: 0.72rem;
+  padding: 0.28rem 0.7rem;
+  cursor: pointer;
+}
+
+.share-kind-btn.active {
+  background: rgba(110, 255, 194, 0.18);
+  color: #dff9ed;
+}

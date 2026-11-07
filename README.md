@@ -55,6 +55,15 @@ don't have to fight Chrome's ES module cache while iterating.
   step through the versions. In Chromium, a file opened from the disk is
   written back there by Save. Submitting a code under the name of a file
   (drop, MCP `submit`) makes a new version of it.
+- **Stores** (0.17.0, `spec_files_store.md`) : GitHub repositories of
+  Faust modules and scenes, the same as in faustmodular (same browser,
+  same list : a store followed in one is followed in the other). File ▸
+  Stores… follows one ; File ▸ Open from a store lists its modules, and
+  one opens as a file linked to the store. A link opens any `.dsp` of
+  GitHub : `?file=<its address on GitHub>` (or `?store=owner/repo&file=
+  <path>&ref=<commit>`) ; `?store=owner/repo` shows the modules of a
+  store. Share offers the link of the store (short, at the commit read)
+  for a module unchanged since it was opened.
 - Sessions hydrate from the browser's Origin Private File System on
   every load, so closing the tab doesn't lose your patches.
 
@@ -178,7 +187,9 @@ mcp/           the Go MCP bridge ; speaks MCP over stdio, brokers
 tools.json     the shared contract (34 tools, JSON Schemas inlined per
                tool so MCP clients can validate without resolving $defs)
 SPECIFICATION.md     architecture and protocol document
-spec_files_store.md  files, File menu and stores (proposed, to validate)
+webapp/vendor/fauststore/   the library of the stores, a copy built by
+                     faustmodular (scripts/update-fauststore.sh)
+spec_files_store.md  files, File menu and stores
 scripts/serve.py     a no-cache dev server
 .github/workflows/   Pages publish + cross-build releases
 ```

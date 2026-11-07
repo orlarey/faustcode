@@ -305,6 +305,18 @@ Phase 1 livrée dans faustcode 0.16.0 :
 - l'interface comprend le menu *File*, l'en-tête (`Wahoo.dsp ● · v3/5`), ◀ ▶ sur les versions, et *All files…* avec la recherche et la corbeille.
 
 Les textes de l'interface sont en anglais, comme le reste de faustcode : *New file*, *Open…*, *Save*, *Save as…*, *Rename…*, *Move to trash*.
+
+Phase 2 livrée dans faustcode 0.17.0, avec faustmodular 3.50.0 :
+- **La bibliothèque.** `fauststore` 1.0.0 vient de `src/store/fauststore.ts` de faustmodular. `npm run build:fauststore` la construit, et `scripts/update-fauststore.sh` la copie dans `webapp/vendor/fauststore/`. Elle n'a pas de fichier `.d.ts`, puisque faustcode est en JavaScript.
+- **L'interface** (`webapp/stores-ui.js`) :
+  - *Stores…* : suivre un magasin, son indicateur (*read*, *write* si faustmodular y a mis un jeton, ⚠), *Read again*, *Open on GitHub*, *Unfollow* ;
+  - *Open from a store* dans le menu *File* : la liste des modules, avec la recherche ;
+  - un module ouvert devient un fichier lié au magasin. Le commit lu est demandé à l'API en un seul appel, après l'ouverture.
+- **Les liens** `?file=` et `?store=` :
+  - un `.dsp` d'un dépôt qui n'est pas un magasin s'ouvre sans lien de magasin ;
+  - le lien du magasin dans *Share*.
+- **Le suivi entre onglets.** L'événement `storage` est suivi dans les deux applications.
+- **Dans faustmodular**, *Open in faustcode* au menu d'un module d'un magasin, qui ouvre faustcode avec `?file=`.
 :::
 
 1. **Fichiers** (faustcode 0.16.0) :

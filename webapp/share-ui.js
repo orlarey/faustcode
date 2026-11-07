@@ -32,13 +32,16 @@ export function buildQr(text) {
 let openDialog = null;
 
 /**
- * @param {{ code: string, filename: string, poly?: number }} session
+ * @param {{ code: string, filename: string, poly?: number, storeUrl?: string|null, storeName?: string|null }} session
+ * storeUrl : the link of the store, for a file published there and unchanged
+ * (spec_files_store.md, « Le bouton Share ») : shown first, the link with the
+ * code (self-contained) one click away.
  */
-export async function openShareDialog({ code, filename, poly = 0 }) {
+export async function openShareDialog({ code, filename, poly = 0, storeUrl = null, storeName = null }) {
   closeShareDialog();
-  const url = await buildShareUrl(location, { code, name: filename, view: 'run', poly });
-  const qr = buildQr(url);
-  const long = url.length > LONG_LINK_CHARS;
+  const codeUrl = await buildShareUrl(location, { code, name: filename, view: 'run', poly });
+  let url = storeUrl || codeUrl;
+  let qr = buildQr(url);
 
   const backdrop = document.createElement('div');
   backdrop.className = 'share-dialog';
@@ -50,6 +53,10 @@ export async function openShareDialog({ code, filename, poly = 0 }) {
       <div class="share-head">
         <h2>Share</h2>
         <button type="button" class="icon-btn share-close" aria-label="Close">✕</button>
+      </div>
+      <div class="share-kind hidden" role="radiogroup" aria-label="Link">
+        <button type="button" class="share-kind-btn" data-kind="store"></button>
+        <button type="button" class="share-kind-btn" data-kind="code">With the code</button>
       </div>
       <div class="share-qr"></div>
       <div class="share-warning hidden"></div>
@@ -66,22 +73,41 @@ export async function openShareDialog({ code, filename, poly = 0 }) {
   const copyBtn = backdrop.querySelector('.share-copy');
   const projectBtn = backdrop.querySelector('.share-project');
 
-  backdrop.querySelector('.share-meta').textContent = `${filename} · ${url.length} characters`;
-  urlEl.value = url;
-  if (qr) {
-    qrEl.innerHTML = qr.svg;
-    // At least MIN_MODULE_PX per module on screen.
-    const px = Math.max(420, (qr.modules + 2 * QUIET_ZONE) * MIN_MODULE_PX);
-    qrEl.style.width = `${px}px`;
-  } else {
-    qrEl.classList.add('hidden');
-    projectBtn.disabled = true;
+  const metaEl = backdrop.querySelector('.share-meta');
+  const show = (kind) => {
+    url = kind === 'store' && storeUrl ? storeUrl : codeUrl;
+    qr = buildQr(url);
+    metaEl.textContent = `${filename} · ${url.length} characters${kind === 'store' && storeUrl ? ` · from the store ${storeName || ''}` : ''}`;
+    urlEl.value = url;
+    warnEl.classList.add('hidden');
+    if (qr) {
+      qrEl.classList.remove('hidden');
+      qrEl.innerHTML = qr.svg;
+      // At least MIN_MODULE_PX per module on screen.
+      const px = Math.max(420, (qr.modules + 2 * QUIET_ZONE) * MIN_MODULE_PX);
+      qrEl.style.width = `${px}px`;
+      projectBtn.disabled = false;
+    } else {
+      qrEl.classList.add('hidden');
+      projectBtn.disabled = true;
+    }
+    if (!qr) {
+      showWarning(warnEl, 'Link too long for a QR code : use Copy link.');
+    } else if (url.length > LONG_LINK_CHARS) {
+      showWarning(warnEl, 'Long link : the QR code may be hard to scan from a distance.');
+    }
+    for (const b of backdrop.querySelectorAll('.share-kind-btn')) b.classList.toggle('active', b.dataset.kind === kind);
+  };
+  if (storeUrl) {
+    const kindEl = backdrop.querySelector('.share-kind');
+    kindEl.classList.remove('hidden');
+    kindEl.querySelector('[data-kind="store"]').textContent = 'From the store';
+    kindEl.addEventListener('click', (e) => {
+      const b = e.target.closest('.share-kind-btn');
+      if (b) show(b.dataset.kind);
+    });
   }
-  if (!qr) {
-    showWarning(warnEl, 'Link too long for a QR code : use Copy link.');
-  } else if (long) {
-    showWarning(warnEl, 'Long link : the QR code may be hard to scan from a distance.');
-  }
+  show(storeUrl ? 'store' : 'code');
 
   copyBtn.addEventListener('click', async () => {
     try {

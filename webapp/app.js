@@ -29,6 +29,7 @@ import { showNotice } from './notice.js';
 import { clearAllDrafts, getDraft } from './drafts.js';
 import * as files from './files.js';
 import * as disk from './disk-files.js';
+import * as storesUi from './stores-ui.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -1073,8 +1074,9 @@ function renderFileLabel(open = files.getOpen(), session = null) {
   const dirty = getDraft(s.sha1) !== null;
   const text = `${name}${dirty ? ' ●' : ''}${open ? ` · v${open.index + 1}/${open.count}` : ''}`;
   if (sessionLabel.textContent !== text) sessionLabel.textContent = text;
+  const from = open && open.file.store ? ` From the store ${open.file.store.store} (${open.file.store.path}).` : '';
   const title = open
-    ? `${open.file.name} — version ${open.index + 1} of ${open.count}${dirty ? ', unsaved changes' : ''} (${s.sha1.slice(0, 8)}). Click : all files ; ◀ ▶ : versions.`
+    ? `${open.file.name} — version ${open.index + 1} of ${open.count}${dirty ? ', unsaved changes' : ''} (${s.sha1.slice(0, 8)}).${from} Click : all files ; ◀ ▶ : versions.`
     : `${s.filename} (${s.sha1.slice(0, 8)})`;
   if (sessionLabel.title !== title) sessionLabel.title = title;
 }
@@ -1587,10 +1589,15 @@ if (shareBtn) {
       const response = await fetch(`/api/${state.currentSha}/user_code.dsp`);
       if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
       const code = await response.text();
+      // a file published in a store, unchanged : the link of the store, at its commit
+      const open = files.getOpen();
+      const published = open && open.file.store && open.file.store.code === open.sha ? open.file : null;
       await openShareDialog({
         code,
         filename: files.nameForSession(session.sha1),
         poly: state.runGlobal.polyVoices || 0,
+        storeUrl: published ? storesUi.storeShareUrl(location, published) : null,
+        storeName: published ? published.store.store : null,
       });
     } catch (err) {
       showError(`Share failed: ${err.message}`);
@@ -2037,6 +2044,32 @@ async function newFile() {
   }
 }
 
+/** The modules of a followed store ; one picked opens as a file linked to the store. */
+function showStoreModules(key) {
+  storesUi.openStoreModules(key, {
+    pick: (state, module) => openFromStore({ store: state.key, path: module.path }),
+  });
+}
+
+/** Opens a module of a store (or any .dsp of GitHub) as a file of faustcode. */
+async function openFromStore(link) {
+  showLoading();
+  hideError();
+  try {
+    const result = await storesUi.openStoreFile(link);
+    if (result.errors && String(result.errors).trim()) {
+      showError(`${result.name} does not compile :\n${result.errors}`);
+      return;
+    }
+    await loadSessionBySha(result.sha1);
+    showNotice(`Opened ${result.name}${result.linked ? ` from ${link.store.replace(/@.*$/, '')}` : ''}.`);
+  } catch (err) {
+    showError(`Open from a store : ${err && err.reason ? storesUi.storeErrorText(err) : (err && err.message) || err}`);
+  } finally {
+    hideLoading();
+  }
+}
+
 function closeFileMenu() {
   if (!fileMenuEl) return;
   fileMenuEl.remove();
@@ -2059,6 +2092,12 @@ function openFileMenu() {
     { label: 'New file', action: newFile },
     { label: 'Open…', key: k('O'), action: openFromDisk },
     { label: 'All files…', action: () => openSessionPicker() },
+    { label: 'Stores…', action: () => storesUi.openStoresPanel({ open: showStoreModules }) },
+    ...(storesUi.stores.list().length ? [{ separator: true, title: 'Open from a store' }] : []),
+    ...storesUi.stores.list().map((st) => ({
+      label: st.key, recent: true, disabled: st.status !== 'ready',
+      action: () => showStoreModules(st.key),
+    })),
     { separator: true, title: recent.length ? 'Recent files' : '' },
     ...recent.map((f) => ({ label: f.name, recent: true, checked: !!open && open.file.id === f.id, action: () => openFile(f.id) })),
     { separator: true },
@@ -2322,6 +2361,7 @@ if (audioGateButton) {
       const notice = await landOnEntrySession();
       hideAudioGate();
       if (notice) showError(notice);
+      showPendingStore();
       return;
     }
     audioGateButton.disabled = true;
@@ -2335,6 +2375,7 @@ if (audioGateButton) {
       hideAudioGate();
       hideError();
       if (notice) showError(notice);
+      showPendingStore();
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       showAudioGate(message);
@@ -2458,6 +2499,8 @@ document.addEventListener('keydown', (e) => {
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
 async function init() {
+  // the followed stores (shared with faustmodular), read in the background
+  storesUi.startStores();
   // Initial sessionOrder will be picked up from /api/state by the first
   // pollState tick (sessions.js loaded it from OPFS preferences.json).
   updateSessionOrderIndicator();
@@ -2533,3 +2576,16 @@ async function init() {
 }
 
 init();
+
+// A link to a store alone (?store=owner/repo, boot.js) : its modules, once the audio gate is passed.
+let pendingStore = null;
+export function showStoreAfterGate(key) {
+  pendingStore = key;
+}
+
+function showPendingStore() {
+  if (!pendingStore) return;
+  const key = pendingStore;
+  pendingStore = null;
+  showStoreModules(key);
+}
