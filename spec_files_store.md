@@ -79,7 +79,7 @@ Un fichier `.lib` est une session à part : soumettre un `.lib` supprime les ses
 | `name` | nom du fichier, `.dsp` ou `.lib` ; unique parmi les fichiers |
 | `versions` | les SHA-1 des sessions enregistrées, de la plus ancienne à la plus récente ; la dernière est la **version courante** |
 | `created`, `modified` | création, dernier enregistrement (ms) |
-| `store` | absent, ou le lien avec un magasin : le module ouvert depuis ce magasin, ou publié dans ce magasin, à ce commit, avec ce code (SHA-1 normalisé, \ref{sec:identite}) |
+| `store` | absent, ou le lien avec un magasin : le module ouvert depuis ce magasin, ou publié dans ce magasin, à ce commit, avec ce code (son SHA-1, \ref{sec:identite}) |
 | `trashed` | dans la corbeille depuis (ms), ou `null` |
 
 Le fichier retenu sur le disque (son *handle*) n'est pas dans `files.json` : il est dans IndexedDB, par l'identifiant du fichier (\ref{sec:disque}).
@@ -121,9 +121,9 @@ Le fichier retenu sur le disque (son *handle*) n'est pas dans `files.json` : il 
 - **Sans elle** (Firefox, Safari) : *Ouvrir…* lit un fichier choisi, et *Enregistrer sous…* télécharge `<nom>`. *Enregistrer* garde la version dans faustcode seulement.
 - **Déposer un fichier** sur la page revient à *Ouvrir…*, sans *handle*.
 
-## Migration des sessions
+## Migration des sessions \label{sec:migration}
 
-Au premier démarrage avec les fichiers, les sessions existantes sont **groupées par nom de fichier** : chaque nom devient un fichier, dont les versions sont ses sessions triées par date de création. C'est ce que les sessions représentaient déjà. Le fichier ouvert est celui de la session active. Deux programmes sans rapport qui portaient le même nom (`shared.dsp`, ouvert par deux liens différents) deviennent deux versions d'un même fichier : *Renommer* ou *Enregistrer sous…* les séparent. La migration est notée dans `preferences.json` (`filesVersion: 1`) et ne se refait pas.
+Les sessions dont le code contient un `\r` sont d'abord réécrites sous le SHA-1 de leur code normalisé (\ref{sec:identite}) ; si cette session existe déjà, elles s'y confondent. Puis, au premier démarrage avec les fichiers, les sessions sont **groupées par nom de fichier** : chaque nom devient un fichier, dont les versions sont ses sessions triées par date de création. C'est ce que les sessions représentaient déjà. Le fichier ouvert est celui de la session active. Deux programmes sans rapport qui portaient le même nom (`shared.dsp`, ouvert par deux liens différents) deviennent deux versions d'un même fichier : *Renommer* ou *Enregistrer sous…* les séparent. La migration est notée dans `preferences.json` (`filesVersion: 1`) et ne se refait pas.
 
 ## Collecte \label{sec:collecte}
 
@@ -254,7 +254,13 @@ Les deux applications doivent lire et écrire les magasins **exactement de la m�
 
 ## Identité des codes \label{sec:identite}
 
-Les magasins identifient un code par le SHA-1 de son texte en UTF-8, fins de ligne normalisées en `\n` (règle de faustmodular). Les sessions de faustcode gardent le SHA-1 du texte tel quel, car c'est leur identité dans le contrat MCP. Les deux coïncident pour un texte sans `\r`. faustcode calcule le SHA-1 normalisé (`fauststore.sha1`) pour toute comparaison avec un magasin : statut, conflit, champ `store.code`.
+**Le source est normalisé dès son entrée dans faustcode** : `\r\n` puis `\r` seul deviennent `\n`, la règle de faustmodular (`normalizeText`). La session est donc identifiée par le SHA-1 du texte normalisé, en UTF-8, comme un code de faustmodular et d'un magasin : une seule identité pour les trois.
+
+- **Pourquoi c'est sans effet sur le programme.** Pour le lexer de Faust (`compiler/parser/faustlexer.l`), `\r` (`\x0d`) est un blanc (`[ \t\x0a\x0d]+`), termine un commentaire `//` (`"//"[^\x0a\x0d]*`), et se traite comme `\n` dans un commentaire `/* */`. Seule une chaîne écrite sur plusieurs lignes (`"\""[^\"]*"\""`, un `declare` par exemple) contient ses `\r` : son texte passe de `\r\n` à `\n`, ce qui est souhaitable.
+- **Convertir, pas supprimer.** Un `\r` seul (fichier d'un ancien Mac) est une fin de ligne : le supprimer collerait les lignes, et un commentaire `//` avalerait la ligne suivante.
+- **Où.** À chaque entrée d'un code : `submit` (MCP et Cmd/Ctrl-S), fichier déposé ou ouvert, collage, liens `?code=` et `?file=`, magasin, message de faustmodular. Le contrat MCP ne définit pas le calcul du SHA-1 : il ne change pas. L'éditeur ne produit pas de `\r` (CodeMirror sépare les lignes par `\n`).
+- **Les sessions existantes** qui contiennent un `\r` sont réécrites sous le SHA-1 de leur code normalisé à la migration (\ref{sec:migration}). Les autres gardent leur SHA-1, qui est déjà le bon.
+- **Enregistrer sur le disque** écrit le texte normalisé : un fichier en fins de ligne Windows est réécrit en `\n`, ce que tous les éditeurs lisent.
 
 # MCP
 
@@ -285,6 +291,7 @@ Les magasins identifient un code par le SHA-1 de son texte en UTF-8, fins de lig
 6. **Les clés `faustmodular:stores` et `faustmodular:store-tokens`** deviennent un contrat entre les deux applications, sous ces noms.
 7. **La bibliothèque `fauststore`**, construite par faustmodular et copiée dans faustcode, plutôt qu'importée à l'exécution depuis faustmodular.
 8. **Share préfère le lien du magasin** pour un fichier publié et inchangé.
+9. **Le source est normalisé à l'entrée** (`\r\n` et `\r` → `\n`) : une session, un code de faustmodular et un code de magasin ont la même empreinte.
 
 # Phases \label{sec:phases}
 
@@ -314,6 +321,7 @@ Les magasins identifient un code par le SHA-1 de son texte en UTF-8, fins de lig
 - [ ] Sur Firefox, *Enregistrer sous…* télécharge le fichier.
 - [ ] Deux versions d'un `.lib` : un `.dsp` qui l'importe compile avec la version courante.
 - [ ] Un `submit` MCP sous le nom du fichier ouvert en ajoute une version ; sous un nom nouveau, crée un fichier ; `list_sessions` est inchangé.
+- [ ] Un fichier `.dsp` en fins de ligne Windows (`\r\n`) et le même en `\n` donnent la même session ; une session existante avec des `\r` est réécrite sous l'empreinte normalisée à la migration.
 - [ ] Supprimer un fichier puis vider la corbeille supprime ses sessions qui n'appartiennent à aucun autre fichier, et seulement celles-là.
 
 **Phase 2**
