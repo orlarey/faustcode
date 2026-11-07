@@ -170,6 +170,7 @@ mcp/           the Go MCP bridge ; speaks MCP over stdio, brokers
 tools.json     the shared contract (34 tools, JSON Schemas inlined per
                tool so MCP clients can validate without resolving $defs)
 SPECIFICATION.md     architecture and protocol document
+spec_files_store.md  files, File menu and stores (proposed, to validate)
 scripts/serve.py     a no-cache dev server
 .github/workflows/   Pages publish + cross-build releases
 ```
