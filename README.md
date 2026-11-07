@@ -64,6 +64,17 @@ don't have to fight Chrome's ES module cache while iterating.
   <path>&ref=<commit>`) ; `?store=owner/repo` shows the modules of a
   store. Share offers the link of the store (short, at the commit read)
   for a module unchanged since it was opened.
+- **Publishing** (0.18.0) : a click on the *read* badge of a store (File ▸
+  Stores…) asks for a token of GitHub (fine-grained, this repository only,
+  Contents read and write), checked before it is kept ; faustmodular uses
+  it too. File ▸ Publish to … publishes the current version of the open
+  file as a module of the store, in one commit, the index made again : a
+  new module, or a new version of the module it was opened from. It warns
+  when someone else published since, offers another name when the path
+  holds another module, and refuses a code that does not compile, a
+  `.lib`, or a code that imports a `.lib` of faustcode. The link to share
+  it, at the commit published, is copied. `⇡` in the header : the file
+  changed since the store.
 - Sessions hydrate from the browser's Origin Private File System on
   every load, so closing the tab doesn't lose your patches.
 

@@ -1072,9 +1072,13 @@ function renderFileLabel(open = files.getOpen(), session = null) {
   if (!s) return;
   const name = open ? open.file.name : s.filename;
   const dirty = getDraft(s.sha1) !== null;
-  const text = `${name}${dirty ? ' ●' : ''}${open ? ` · v${open.index + 1}/${open.count}` : ''}`;
+  // ⇡ : the version shown differs from the code of the store (opened from it, or published to it)
+  const ahead = !!(open && open.file.store && open.file.store.code !== open.sha);
+  const text = `${name}${dirty ? ' ●' : ''}${open ? ` · v${open.index + 1}/${open.count}` : ''}${ahead ? ' ⇡' : ''}`;
   if (sessionLabel.textContent !== text) sessionLabel.textContent = text;
-  const from = open && open.file.store ? ` From the store ${open.file.store.store} (${open.file.store.path}).` : '';
+  const from = open && open.file.store
+    ? ` From the store ${open.file.store.store} (${open.file.store.path})${ahead ? ', changed since : ⇡ File ▸ Publish' : ''}.`
+    : '';
   const title = open
     ? `${open.file.name} — version ${open.index + 1} of ${open.count}${dirty ? ', unsaved changes' : ''} (${s.sha1.slice(0, 8)}).${from} Click : all files ; ◀ ▶ : versions.`
     : `${s.filename} (${s.sha1.slice(0, 8)})`;
@@ -2070,6 +2074,59 @@ async function openFromStore(link) {
   }
 }
 
+/**
+ * Publish to a store (spec_files_store.md, « Publier ») : greyed without a
+ * store in write, direct with one, one entry per store with several.
+ */
+function publishItems(open) {
+  const writable = storesUi.publishing.writable();
+  if (writable.length <= 1) {
+    const store = writable[0];
+    return [
+      { separator: true },
+      {
+        label: store ? `Publish to ${store}…` : 'Publish to a store…',
+        disabled: !open || !store,
+        action: () => publishOpenFile(store),
+      },
+    ];
+  }
+  return [
+    { separator: true, title: 'Publish to' },
+    ...writable.map((store) => ({ label: `${store}…`, recent: true, disabled: !open, action: () => publishOpenFile(store) })),
+  ];
+}
+
+/** Publishes the current version of the open file to a store, as a module. */
+async function publishOpenFile(store) {
+  const open = files.getOpen();
+  if (!open || !store) return;
+  if (getDraft(open.sha) !== null) {
+    showNotice('Save the file first (Cmd/Ctrl-S) : the saved versions are published.', 6000);
+    return;
+  }
+  if (open.index !== open.count - 1) {
+    showNotice(`The version shown is not the current one (v${open.index + 1}/${open.count}) : save it to make it current, then publish.`, 7000);
+    return;
+  }
+  const [code, errors] = await Promise.all([
+    sessionCode(open.sha),
+    fetch(`/api/${open.sha}/errors.log`).then((r) => (r.ok ? r.text() : '')).catch(() => ''),
+  ]);
+  if (code === null) return;
+  const userLibs = new Set(files.listFiles().filter((f) => /\.lib$/i.test(f.name)).map((f) => f.name));
+  await storesUi.publishFile(
+    { store, file: open.file, sha: open.sha, code, errors, userLibs },
+    {
+      notify: (text) => showNotice(text, 6000),
+      linkCopied: (url) => {
+        if (!url) return;
+        copyToClipboard(url).catch(() => showNotice(`Link to share it : ${url}`, 20000));
+      },
+    },
+  );
+}
+
 function closeFileMenu() {
   if (!fileMenuEl) return;
   fileMenuEl.remove();
@@ -2105,6 +2162,7 @@ function openFileMenu() {
     { label: 'Save as…', key: k('S', true), action: saveOpenFileAs, disabled: !open },
     { label: 'Rename…', action: renameOpenFile, disabled: !open },
     { label: 'Move to trash', action: trashOpenFile, disabled: !open },
+    ...publishItems(open),
   ];
   const menu = document.createElement('div');
   menu.className = 'file-menu';

@@ -1057,3 +1057,49 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   background: rgba(110, 255, 194, 0.18);
   color: #dff9ed;
 }
+
+/* Writing to a store : the token, publishing (spec_files_store.md, « Publier »). */
+button.store-badge {
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button.store-badge:hover:not(.error) {
+  background: rgba(147, 200, 220, 0.14);
+}
+
+.store-token-field {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  color: #9fb3bb;
+}
+
+.store-token-input {
+  border: 1px solid rgba(147, 200, 220, 0.35);
+  background: #111a26;
+  color: #d3e6ee;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.74rem;
+  outline: none;
+}
+
+.store-panel-note a {
+  color: #9ff1c9;
+}
+
+.store-dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.store-publish-say {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}

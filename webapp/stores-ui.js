@@ -25,7 +25,11 @@ import {
   nameOfPath,
   STORE_MANIFEST,
   FAUSTSTORE_VERSION,
+  Publishing,
+  PublishError,
+  modulePath,
 } from './vendor/fauststore/fauststore.js';
+import { planPublication, commitMessage } from './publish-plan.js';
 import * as files from './files.js';
 import { escapeHtml } from './app/helpers.js';
 import { shareBaseUrl } from './share-link.js';
@@ -34,7 +38,8 @@ export { FAUSTSTORE_VERSION };
 
 export const tokens = new StoreTokens();
 export const stores = new Stores();
-stores.tokenFor = (key) => tokens.get(key);
+// the stores with a token : in read and write (the tokens are only sent to GitHub)
+export const publishing = new Publishing(tokens, stores);
 
 let started = false;
 
@@ -150,7 +155,7 @@ function badgeOf(state) {
   if (state.status === 'error') return { text: '⚠', cls: 'error', title: storeErrorText({ reason: state.error }) };
   if (state.status === 'loading') return { text: '…', cls: 'loading', title: 'Reading…' };
   return tokens.get(state.key)
-    ? { text: 'write', cls: 'write', title: 'Read and write : a token is kept for this store (faustmodular, File ▸ or the store menu)' }
+    ? { text: 'write', cls: 'write', title: 'Read and write : a token is kept for this store (shared with faustmodular)' }
     : { text: 'read', cls: 'read', title: 'Read only' };
 }
 
@@ -192,7 +197,7 @@ export function openStoresPanel(actions) {
     </form>
     <div class="store-follow-status"></div>
     <div class="store-list"></div>
-    <p class="store-panel-note">Stores are GitHub repositories of Faust modules and scenes, shared with faustmodular (same browser, same list). Writing to a store (a token) comes in a next version ; a token given in faustmodular is used here.</p>`;
+    <p class="store-panel-note">Stores are GitHub repositories of Faust modules and scenes, shared with faustmodular (same browser, same list). Click <em>read</em> to write to a store : a token of GitHub, kept in this browser (faustmodular uses it too), only sent to GitHub.</p>`;
   const input = body.querySelector('.store-follow-input');
   const status = body.querySelector('.store-follow-status');
   const list = body.querySelector('.store-list');
@@ -211,11 +216,15 @@ export function openStoresPanel(actions) {
           <span class="store-row-name">${escapeHtml(state.key)}</span>
           <span class="store-row-meta">${escapeHtml(state.store ? (state.store.manifest.name || '') : '')}${count !== null ? ` · ${count} module${count === 1 ? '' : 's'}` : ''}</span>
         </button>
-        <span class="store-badge ${badge.cls}" title="${escapeHtml(badge.title)}">${escapeHtml(badge.text)}</span>
+        <button type="button" class="store-badge ${badge.cls}" title="${escapeHtml(badge.title)} — click : write to this store (a token)">${escapeHtml(badge.text)}</button>
         <button type="button" class="icon-btn store-row-reload" title="Read again">↻</button>
         <button type="button" class="icon-btn store-row-github" title="Open on GitHub">↗</button>
         <button type="button" class="icon-btn store-row-remove" title="Unfollow">✕</button>`;
       row.querySelector('.store-row-main').addEventListener('click', () => { closePanel(); actions.open(state.key); });
+      row.querySelector('.store-badge').addEventListener('click', () => {
+        if (state.status === 'error') return;
+        openTokenDialog(state.key, () => openStoresPanel(actions), () => openStoresPanel(actions));
+      });
       row.querySelector('.store-row-reload').addEventListener('click', () => { void stores.refresh(state.key); });
       row.querySelector('.store-row-github').addEventListener('click', () => {
         window.open(`https://github.com/${state.ref.owner}/${state.ref.repo}`, '_blank', 'noopener');
@@ -292,4 +301,173 @@ export function openStoreModules(key, actions) {
   stores.onChange(render);
   render();
   search.focus();
+}
+
+// ---------------------------------------------------------------------
+// Writing : the token of a store, and publishing (phase 3)
+// ---------------------------------------------------------------------
+
+const TOKEN_PAGE = 'https://github.com/settings/personal-access-tokens/new';
+
+/** The text of an error of publication (the texts of faustmodular). */
+export function publishErrorText(e, store) {
+  const reason = e instanceof PublishError || (e && e.reason) ? e.reason : 'network';
+  const texts = {
+    token: 'GitHub refuses the token (expired, or not copied right).',
+    rights: `This token cannot write to ${store} : it needs the permission Contents read and write, for this repository.`,
+    empty: `The repository ${store} is empty : first create a file (a README) in it on GitHub.`,
+    notFound: `Repository ${store} not found with this token.`,
+    network: 'GitHub does not answer : nothing was published.',
+    conflict: `The store ${store} changed during the publication : nothing was published, try again.`,
+  };
+  return texts[reason] || texts.network;
+}
+
+/**
+ * Write to a store : its token, checked (the repository readable and
+ * writable with it) before it is kept ; or forgotten (read only again).
+ * `done` : once a token is kept ; `back` : closed.
+ */
+export function openTokenDialog(key, done = null, back = null) {
+  const writable = !!tokens.get(key);
+  const body = makePanel(`Write to ${key}`);
+  body.innerHTML = `
+    <label class="store-token-field">
+      <span>Access token</span>
+      <input type="password" class="store-token-input" placeholder="github_pat_…" autocomplete="off" spellcheck="false">
+    </label>
+    <p class="store-panel-note">Create on GitHub a fine-grained token : for this repository only, with the permission Contents read and write, and an expiration date. It stays in this browser (faustmodular uses it too) and is only sent to GitHub. <a href="${TOKEN_PAGE}" target="_blank" rel="noopener">Create a token on GitHub</a></p>
+    <div class="store-follow-status"></div>
+    <div class="store-dialog-buttons">
+      ${writable ? '<button type="button" class="primary-btn store-token-forget">Read only again</button>' : ''}
+      <button type="button" class="primary-btn store-token-verify">Check and save</button>
+    </div>`;
+  const input = body.querySelector('.store-token-input');
+  const status = body.querySelector('.store-follow-status');
+  input.value = tokens.get(key) || '';
+  const verify = body.querySelector('.store-token-verify');
+  const check = async () => {
+    verify.disabled = true;
+    status.className = 'store-follow-status';
+    status.textContent = 'Checking…';
+    try {
+      const ok = await publishing.configure(key, input.value);
+      status.textContent = `You can publish to ${ok.key} (branch ${ok.branch}).${ok.private ? '' : ' This repository is public : what you publish there can be seen by everyone, with its history.'}`;
+      if (done) setTimeout(() => { closePanel(); done(); }, ok.private ? 600 : 2500);
+    } catch (err) {
+      status.classList.add('error');
+      status.textContent = publishErrorText(err, key);
+    } finally {
+      verify.disabled = false;
+    }
+  };
+  verify.addEventListener('click', () => { void check(); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void check(); } });
+  const forget = body.querySelector('.store-token-forget');
+  if (forget) {
+    forget.addEventListener('click', () => {
+      publishing.forget(key);
+      closePanel();
+      if (back) back();
+    });
+  }
+  input.focus();
+}
+
+/**
+ * Publishes the version shown of a file to a store, as a module : what will
+ * happen first (publish-plan.js), and what to choose ; one commit, the index
+ * made again ; the file linked to the store at the commit published.
+ *   a : { store, file, sha, code, errors, userLibs }
+ *   ui : { notify(text), linkCopied(url) }
+ * Resolves with the result shown, or null if cancelled.
+ */
+export async function publishFile(a, ui) {
+  const body = makePanel(`Publish ${a.file.name} to ${a.store}`);
+  body.innerHTML = '<div class="store-empty">Reading the store…</div>';
+  let state;
+  try {
+    state = await stores.refresh(a.store);
+  } catch { /* below */ }
+  if (!state || state.status !== 'ready') {
+    body.innerHTML = `<div class="store-follow-status error">${escapeHtml(storeErrorText({ reason: state && state.error }))}</div>`;
+    return null;
+  }
+  const plan = planPublication({
+    name: a.file.name, code: a.code, sha: a.sha, errors: a.errors, store: a.store,
+    index: state.store.index, link: a.file.store || null, userLibs: a.userLibs, modulePath,
+  });
+  if (plan.refused) {
+    const why = {
+      errors: 'This version does not compile : fix it and save it, then publish.',
+      lib: 'A .lib file is not published : the stores have no libraries yet.',
+      imports: `This code imports ${(plan.libs || []).join(', ')}, a library of faustcode : it would not compile elsewhere. Publish a version without it.`,
+    }[plan.refused];
+    body.innerHTML = `<div class="store-follow-status error">${escapeHtml(why)}</div>`;
+    return null;
+  }
+  const say = {
+    new: `Publish as a new module : ${plan.path}.`,
+    version: `Publish a new version of ${plan.path}. The versions before stay in the store, with their commit.`,
+    changed: `${plan.path} changed in the store since you opened it (someone else published). Publishing makes yours the last version ; theirs stays in the history.`,
+    conflict: `${plan.path} is another module of the store. Publish a new version of it, or this module under another name (${plan.other}) ?`,
+    same: `This version is already the last one of ${plan.path} : nothing to publish.`,
+    older: `This version is an older version of ${plan.path} in the store : publishing it would take the module back.`,
+  }[plan.status];
+  const buttons = {
+    new: [['publish', 'Publish', plan.path]],
+    version: [['publish', 'Publish a new version', plan.path]],
+    changed: [['publish', 'Publish anyway', plan.path]],
+    conflict: [['publish', 'New version', plan.path], ['publish', 'Under another name', plan.other]],
+    same: [['link', 'Copy the link', plan.path]],
+    older: [['publish', 'Publish anyway', plan.path]],
+  }[plan.status];
+  body.innerHTML = `
+    <p class="store-publish-say"></p>
+    <div class="store-follow-status"></div>
+    <div class="store-dialog-buttons">
+      <button type="button" class="primary-btn store-publish-cancel">Cancel</button>
+    </div>`;
+  body.querySelector('.store-publish-say').textContent = say;
+  const status = body.querySelector('.store-follow-status');
+  const row = body.querySelector('.store-dialog-buttons');
+  body.querySelector('.store-publish-cancel').addEventListener('click', closePanel);
+  return new Promise((resolve) => {
+    for (const [action, label, path] of buttons) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'primary-btn store-publish-go';
+      b.textContent = label;
+      row.appendChild(b);
+      b.addEventListener('click', async () => {
+        for (const x of row.querySelectorAll('button')) x.disabled = true;
+        if (action === 'link') {
+          // the commit of the store, for a link that designates this version for ever
+          const commit = await stores.reader.commitOf(state.ref, tokens.get(a.store));
+          files.setFileStore(a.file.id, { store: a.store, path, commit, code: a.sha });
+          const url = storeShareUrl(location, files.getFile(a.file.id));
+          ui.linkCopied(url);
+          closePanel();
+          resolve({ status: 'same', path, url });
+          return;
+        }
+        status.className = 'store-follow-status';
+        status.textContent = 'Publishing…';
+        try {
+          const replaced = !!state.store.index.modules.find((m) => m.path === path);
+          const result = await publishing.publish(a.store, new Map([[path, a.code]]), commitMessage(path, replaced));
+          files.setFileStore(a.file.id, { store: a.store, path, commit: result.commit, code: a.sha });
+          const url = storeShareUrl(location, files.getFile(a.file.id));
+          ui.linkCopied(url);
+          ui.notify(`Published to ${a.store} : ${path}. The link to share it is copied.`);
+          closePanel();
+          resolve({ status: plan.status, path, url, commit: result.commit });
+        } catch (err) {
+          status.classList.add('error');
+          status.textContent = publishErrorText(err, a.store);
+          for (const x of row.querySelectorAll('button')) x.disabled = false;
+        }
+      });
+    }
+  });
 }

@@ -317,6 +317,11 @@ Phase 2 livrée dans faustcode 0.17.0, avec faustmodular 3.50.0 :
   - le lien du magasin dans *Share*.
 - **Le suivi entre onglets.** L'événement `storage` est suivi dans les deux applications.
 - **Dans faustmodular**, *Open in faustcode* au menu d'un module d'un magasin, qui ouvre faustcode avec `?file=`.
+
+Phase 3 livrée dans faustcode 0.18.0 :
+- **Le jeton.** Un clic sur l'indicateur d'un magasin (*Stores…*) ouvre la boîte du jeton. Le jeton est vérifié avant d'être gardé, et faustmodular s'en sert aussi ; la même boîte permet *Read only again*.
+- **La publication.** *Publish to …* est dans le menu *File*, et les cas du tableau sont décidés par `webapp/publish-plan.js`, pur et testé. Le lien de partage est copié après la publication, et `⇡` dans l'en-tête signale un fichier modifié depuis le magasin.
+- **Une version enregistrée seulement.** On publie la version courante du fichier, enregistrée : un fichier avec des modifications non enregistrées, ou affiché à une ancienne version, demande d'abord d'enregistrer.
 :::
 
 1. **Fichiers** (faustcode 0.16.0) :
