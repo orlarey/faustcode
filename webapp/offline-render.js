@@ -16,7 +16,7 @@
 
 import { getFaust } from './faust.js';
 import { injectLibsIntoFs, LIB_INCLUDE_ARG } from './lib-inject.js';
-import { listSessions } from './sessions.js';
+import { libSessionsForCompile } from './files.js';
 
 // Validation caps. These are sanity bounds, not real limits — they
 // just protect against accidental OOM if a caller asks for a 10-minute
@@ -39,7 +39,7 @@ async function compileFresh(code, polyVoices) {
   // Inject user `.lib` sessions into the user libs dir before the
   // compiler resolves any import("…"). LIB_INCLUDE_ARG below tells
   // Faust to look there first.
-  try { injectLibsIntoFs(faust.compiler.fs(), listSessions()); } catch {}
+  try { injectLibsIntoFs(faust.compiler.fs(), libSessionsForCompile()); } catch {}
   const Generator = polyVoices > 0
     ? faust.FaustPolyDspGenerator
     : faust.FaustMonoDspGenerator;

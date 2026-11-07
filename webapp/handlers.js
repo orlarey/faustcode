@@ -52,6 +52,7 @@ import { buildAudioMetrics } from './audio-metrics.js';
 import { buildSpectrumSeries } from './spectrum-series.js';
 import { injectLibsIntoFs, isLibFilename, LIB_INCLUDE_ARG } from './lib-inject.js';
 import { announceSubmit } from './playground-link.js';
+import { attachSubmission, libSessionsForCompile, normalizeSource } from './files.js';
 
 /**
  * dispatch(req) — entry point called from ws-client.js.
@@ -148,12 +149,13 @@ async function submit(args) {
   // Announced with the session active before it (playground-link.js).
   const previous = getActiveSha1();
   const result = await compileSubmission(args);
-  announceSubmit({ sha1: result.sha1, previous, code: args.code, filename: args.filename, errors: result.errors });
+  announceSubmit({ sha1: result.sha1, previous, code: normalizeSource(args.code), filename: args.filename, errors: result.errors });
   return result;
 }
 
 async function compileSubmission(args) {
-  const code = typeof args.code === 'string' ? args.code : '';
+  // Normalized at its entry (spec_files_store.md) : CRLF and lone CR become LF.
+  const code = typeof args.code === 'string' ? normalizeSource(args.code) : '';
   if (!code) throw new Error('Missing or empty `code`');
 
   const filename = safeSessionName(args.filename);
@@ -164,6 +166,7 @@ async function compileSubmission(args) {
   // Idempotent fast path : same code already submitted → reuse the entry.
   const existing = getSession(sha1);
   if (existing) {
+    attachSubmission(sha1, filename);
     shimSetActiveSha(sha1);
     return {
       sha1,
@@ -178,24 +181,12 @@ async function compileSubmission(args) {
   const fs = compiler.fs();
   const name = 'session';
 
-  // A new .lib submission with a given filename replaces any previous
-  // .lib session that has the same filename. `import("foo.lib")` is
-  // resolved by name, so keeping multiple sha-versioned entries would
-  // create ambiguity about which one the compiler picks. .dsp keeps
-  // its sha-versioned history — multiple submissions of the same .dsp
-  // file accumulate as distinct entries.
-  if (isLibFilename(filename)) {
-    for (const s of listSessions()) {
-      if (s.sha1 !== sha1 && s.filename === filename && isLibFilename(s.filename)) {
-        await deleteSession(s.sha1);
-      }
-    }
-  }
-
-  // Make every current `.lib` session visible to the compiler. They
+  // A .lib file keeps its versions ; only the current version of each
+  // .lib file is given to the compiler (files.js, libSessionsForCompile).
+  // Make every current `.lib` file visible to the compiler. They
   // land in a dedicated dir and we pass LIB_INCLUDE_ARG below so
   // Faust looks there first ; stock libs are never touched.
-  injectLibsIntoFs(fs, listSessions());
+  injectLibsIntoFs(fs, libSessionsForCompile());
 
   // Clean any previous artefacts from a failed run.
   for (const p of ['/' + name + '-sig.dot', '/' + name + '.dot']) tryUnlink(fs, p);
@@ -224,6 +215,7 @@ async function compileSubmission(args) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
+    attachSubmission(sha1, filename);
     shimSetActiveSha(sha1);
     return {
       sha1,
@@ -269,6 +261,7 @@ async function compileSubmission(args) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
+    attachSubmission(sha1, filename);
     shimSetActiveSha(sha1);
   }
 

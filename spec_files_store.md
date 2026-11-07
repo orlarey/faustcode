@@ -105,8 +105,8 @@ Le fichier retenu sur le disque (son *handle*) n'est pas dans `files.json` : il 
 ```tree "OPFS de faustcode"
 /
   sessions/<sha1>/…      inchangé : les versions
-  files.json             les fichiers (nouveau)
-  preferences.json       + activeFile : l'identifiant du fichier ouvert
+  files.json             les fichiers, et le fichier ouvert (open) (nouveau)
+  preferences.json       inchangé
   faustmodular/…         les documents de faustmodular (même origine, non lus ici)
 ```
 
@@ -118,12 +118,12 @@ Le fichier retenu sur le disque (son *handle*) n'est pas dans `files.json` : il 
   - *Ouvrir…* lit un fichier `.dsp` ou `.lib` et retient son *handle*, dans IndexedDB `faustcode-files`, par l'identifiant du fichier ;
   - *Enregistrer* réécrit ce fichier sur le disque, avec ou sans erreurs, car un éditeur enregistre ce qu'on tape. Le navigateur redemande la permission d'écrire après un rechargement ;
   - *Enregistrer sous…* choisit un autre fichier du disque et crée un nouveau fichier de faustcode, à la version courante.
-- **Sans elle** (Firefox, Safari) : *Ouvrir…* lit un fichier choisi, et *Enregistrer sous…* télécharge `<nom>`. *Enregistrer* garde la version dans faustcode seulement.
+- **Sans elle** (Firefox, Safari) : *Ouvrir…* lit un fichier choisi, et *Enregistrer sous…* demande un nom, télécharge le fichier sous ce nom et crée le nouveau fichier de faustcode. *Enregistrer* garde la version dans faustcode seulement.
 - **Déposer un fichier** sur la page revient à *Ouvrir…*, sans *handle*.
 
 ## Migration des sessions \label{sec:migration}
 
-Les sessions dont le code contient un `\r` sont d'abord réécrites sous le SHA-1 de leur code normalisé (\ref{sec:identite}) ; si cette session existe déjà, elles s'y confondent. Puis, au premier démarrage avec les fichiers, les sessions sont **groupées par nom de fichier** : chaque nom devient un fichier, dont les versions sont ses sessions triées par date de création. C'est ce que les sessions représentaient déjà. Le fichier ouvert est celui de la session active. Deux programmes sans rapport qui portaient le même nom (`shared.dsp`, ouvert par deux liens différents) deviennent deux versions d'un même fichier : *Renommer* ou *Enregistrer sous…* les séparent. La migration est notée dans `preferences.json` (`filesVersion: 1`) et ne se refait pas.
+Les sessions dont le code contient un `\r` sont d'abord réécrites sous le SHA-1 de leur code normalisé (\ref{sec:identite}) ; si cette session existe déjà, elles s'y confondent. Puis, au premier démarrage avec les fichiers, les sessions sont **groupées par nom de fichier** : chaque nom devient un fichier, dont les versions sont ses sessions triées par date de création. C'est ce que les sessions représentaient déjà. Le fichier ouvert est celui de la session active. Deux programmes sans rapport qui portaient le même nom (`shared.dsp`, ouvert par deux liens différents) deviennent deux versions d'un même fichier : *Renommer* ou *Enregistrer sous…* les séparent. La règle s'applique à chaque démarrage, et non une seule fois : une session qui n'appartient à aucun fichier (écrite par une ancienne version de faustcode dans un autre onglet, par exemple) rejoint le fichier de son nom, ou en crée un. Une fois les sessions adoptées, il n'en reste plus d'orphelines : la règle ne fait plus rien.
 
 ## Collecte \label{sec:collecte}
 
@@ -139,7 +139,8 @@ Un bouton **Fichier ▾** prend la place du bouton **+**, à gauche de l'en-têt
 Fichier ▾
  Nouveau fichier
  Ouvrir…                         Cmd/Ctrl-O      un fichier du disque
- Fichiers récents ▸                              les 10 derniers, puis « Tous les fichiers… »
+ Tous les fichiers…                              la liste, la recherche, la corbeille
+ Fichiers récents                                les 8 derniers, dans le menu
  Ouvrir depuis un magasin ▸                      un sous-menu par magasin suivi (phase 2)
  ──────────────
  Enregistrer                     Cmd/Ctrl-S
@@ -149,14 +150,12 @@ Fichier ▾
  ──────────────
  Publier dans un magasin…                        (phase 3)
  Magasins…                                       suivre, lire et écrire (phase 2)
- ──────────────
- Archiver toutes les sessions                    l'actuel bouton Archive
 ```
 
 - **Nouveau fichier** crée `untitled.dsp` (unique), avec un `process = _;` minimal, et l'ouvre dans la vue dsp.
 - **Tous les fichiers…** est la liste actuelle des sessions, devenue liste des fichiers : recherche par nom, tri chronologique ou par usage, et une section **Corbeille** (restaurer, vider).
 - **Publier dans un magasin…** suit la règle de faustmodular. Il est grisé sans magasin en écriture, direct avec un seul, et propose un sous-menu avec plusieurs.
-- Le bouton **Archive** et le bouton de suppression quittent l'en-tête pour le menu, ce qui libère la place que demande la mise en page étroite (`spec_share_url.md`).
+- Le bouton de suppression quitte l'en-tête pour le menu (*Supprimer*, vers la corbeille), et le bouton **Archive** est retiré : il ne fonctionnait plus depuis la version sans Docker (sa route renvoyait une erreur). L'en-tête gagne la place que demande la mise en page étroite (`spec_share_url.md`).
 
 ## L'en-tête
 
@@ -294,6 +293,19 @@ Les deux applications doivent lire et écrire les magasins **exactement de la m�
 9. **Le source est normalisé à l'entrée** (`\r\n` et `\r` → `\n`) : une session, un code de faustmodular et un code de magasin ont la même empreinte.
 
 # Phases \label{sec:phases}
+
+::: note [État]
+Phase 1 livrée dans faustcode 0.16.0 :
+- `webapp/file-index.js` est le modèle, pur et testé (`file-index.test.mjs`) ;
+- `webapp/files.js` le garde dans `files.json`, avec le fichier ouvert, et prévient les autres onglets ;
+- `webapp/disk-files.js` retient les fichiers du disque ;
+- le source est normalisé à l'entrée, par l'interface comme par MCP ;
+- les sessions sont adoptées par nom, et celles qui contiennent un `\r` sont réécrites sous leur empreinte normalisée ;
+- les `.lib` gardent leurs versions, et seule la version courante compile ;
+- l'interface comprend le menu *File*, l'en-tête (`Wahoo.dsp ● · v3/5`), ◀ ▶ sur les versions, et *All files…* avec la recherche et la corbeille.
+
+Les textes de l'interface sont en anglais, comme le reste de faustcode : *New file*, *Open…*, *Save*, *Save as…*, *Rename…*, *Move to trash*.
+:::
 
 1. **Fichiers** (faustcode 0.16.0) :
    - `files.json` et la migration ;

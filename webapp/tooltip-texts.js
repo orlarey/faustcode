@@ -1,12 +1,10 @@
 export const TOOLTIP_TEXTS = {
   byId: {
-    'session-prev': 'Select previous session',
-    'session-next': 'Select next session',
-    'session-label': 'Select .dsp file',
+    'session-prev': 'Previous version of the file',
+    'session-next': 'Next version of the file',
+    'file-menu-btn': 'File : new, open, save, recent files',
     'view-select': 'Select view',
     'refresh-session': 'Refresh session',
-    'delete-session': 'Delete session',
-    'archive-btn': 'Download DSP archive',
     'download-btn': 'Download current output',
     'file-input': 'Select .dsp file',
     'audio-gate-button': 'Enable audio for this tab'

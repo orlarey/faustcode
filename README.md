@@ -47,6 +47,14 @@ don't have to fight Chrome's ES module cache while iterating.
   keystroke by keystroke (and vice-versa) when both are visible, so you
   can iterate on the code while watching the Run view update underneath
   at every `Cmd/Ctrl-S`.
+- **Files** (0.16.0, `spec_files_store.md`) : the **File** menu has New
+  file, Open… (`Cmd/Ctrl-O`), All files… (search, trash), the recent
+  files, Save (`Cmd/Ctrl-S`), Save as… (`Shift-Cmd/Ctrl-S`), Rename… and
+  Move to trash. A file is a name and its versions : each save adds one,
+  the header shows `Wahoo.dsp ● · v3/5` (● : unsaved changes) and ◀ ▶
+  step through the versions. In Chromium, a file opened from the disk is
+  written back there by Save. Submitting a code under the name of a file
+  (drop, MCP `submit`) makes a new version of it.
 - Sessions hydrate from the browser's Origin Private File System on
   every load, so closing the tab doesn't lose your patches.
 

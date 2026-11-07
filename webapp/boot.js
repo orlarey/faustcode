@@ -39,11 +39,13 @@ import {
 import { tryHandOff, installHandoffResponder, probeTabs } from './tab-handoff.js';
 import { installPlaygroundLink, isPlaygroundLink } from './playground-link.js';
 import { showNotice } from './notice.js';
+import { initFiles, codeSha1, getOpen, nameForSession } from './files.js';
+import { writeIfHandle, hasFileAccess } from './disk-files.js';
 // Install the live mirror bus on window.__faustEditorBus before any
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
 
-const WEBAPP_VERSION = '0.15.0';
+const WEBAPP_VERSION = '0.16.0';
 
 // 1. Synchronously install the fetch shim BEFORE any view code runs.
 installApiShim();
@@ -302,6 +304,9 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
   try {
     const count = await initSessions();
     appendLog('info', `OPFS sessions hydrated : ${count} session${count === 1 ? '' : 's'}`);
+    // The files on top of the sessions (spec_files_store.md) : files.json,
+    // and the migration of the sessions kept before the files.
+    await initFiles();
     if (!new URLSearchParams(location.search).get('mcp')) {
       const saved = getLastMcpUrl();
       if (saved && wsInput) wsInput.value = saved;
@@ -355,9 +360,19 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
   // a /api/submit + /api/state round-trip, and keep the buffer in sync
   // with the active session.
   floatingEditor.setOnSubmit(async (code, filename) => {
+    // a save of the open file : a new version of it, its file of the disk written
+    const open = getOpen();
+    if (open && hasFileAccess()) {
+      try {
+        const written = await writeIfHandle(open.file.id, code);
+        if (written) showNotice(`Saved to ${written}`, 2500);
+      } catch (err) {
+        showNotice(`Not written to the disk : ${err && err.message ? err.message : err}`, 8000);
+      }
+    }
     const r = await fetch('/api/submit', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, filename }),
+      body: JSON.stringify({ code, filename: open ? open.file.name : filename, fileId: open ? open.file.id : null }),
     });
     const result = await r.json().catch(() => ({}));
     if (!r.ok || !result || typeof result.sha1 !== 'string') {
@@ -385,7 +400,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
     ev.preventDefault();
     const sha = (ev.detail && ev.detail.sha1) || getActiveSha1();
     const sess = sha ? getSession(sha) : null;
-    if (sess) floatingEditor.loadSession({ sha1: sess.sha1, code: sess.code, filename: sess.filename });
+    if (sess) floatingEditor.loadSession({ sha1: sess.sha1, code: sess.code, filename: nameForSession(sess.sha1) });
     floatingEditor.toggle();
   });
 
@@ -401,7 +416,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
       lastShaForSync = sha;
       const s = sha ? getSession(sha) : null;
       editorBus.loadSession(s ? s.code : '', sha);
-      if (s) floatingEditor.loadSession({ sha1: s.sha1, code: s.code, filename: s.filename });
+      if (s) floatingEditor.loadSession({ sha1: s.sha1, code: s.code, filename: nameForSession(s.sha1) });
     }
   }, 500);
 
@@ -460,9 +475,8 @@ function isAudioUnlocked() {
  * While the audio gate is still up, ENTER will land on it instead.
  */
 async function openSharedFromOtherTab(shared) {
-  const bytes = new TextEncoder().encode(shared.code);
-  const digest = await crypto.subtle.digest('SHA-1', bytes);
-  const sha1 = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  // the sha1 submit will give it (normalized source)
+  const sha1 = await codeSha1(shared.code);
   void (async () => {
     const call = (op, args) => dispatch({ id: `handoff-${op}-${Date.now()}`, op, args });
     const sub = await call('submit', { code: shared.code, filename: shared.name });

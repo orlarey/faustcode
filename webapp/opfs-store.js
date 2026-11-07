@@ -290,3 +290,26 @@ export async function writePreferences(prefs) {
   const root = await getRoot();
   await writeTextFile(root, PREFS_FILE, JSON.stringify(prefs, null, 2));
 }
+
+// ---------------------------------------------------------------------
+// files.json — the files (file-index.js) : names and versions of the
+// sessions, at the OPFS root (spec_files_store.md, « Le stockage »).
+// ---------------------------------------------------------------------
+
+const FILES_FILE = 'files.json';
+
+export async function readFilesJson() {
+  const root = await getRoot();
+  const text = await readTextFile(root, FILES_FILE);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+export async function writeFilesJson(data) {
+  const root = await getRoot();
+  await writeTextFile(root, FILES_FILE, JSON.stringify(data, null, 2));
+}

@@ -737,3 +737,125 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
 /* Audio off : the slider dims (it still sets the level for next time). */
 .run-volume:has(.run-audio-speaker.is-off) input[type="range"],
 .run-volume:has(.run-audio-speaker.is-off) .run-volume-value { opacity: 0.45; }
+
+/* The File menu (spec_files_store.md, « Les surfaces »). */
+.file-menu-btn {
+  white-space: nowrap;
+}
+
+.file-menu {
+  position: fixed;
+  z-index: 2500;
+  min-width: 230px;
+  max-width: min(360px, calc(100vw - 16px));
+  padding: 0.3rem;
+  border: 1px solid rgba(147, 200, 220, 0.35);
+  border-radius: 10px;
+  background: #0a1118;
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.55);
+}
+
+.file-menu-item {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #d3e6ee;
+  font-size: 0.76rem;
+  text-align: left;
+  padding: 0.36rem 0.55rem;
+  cursor: pointer;
+}
+
+.file-menu-item span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.file-menu-item.recent {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.72rem;
+}
+
+.file-menu-item:hover:not(:disabled) {
+  background: rgba(147, 200, 220, 0.15);
+}
+
+.file-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.file-menu-key {
+  color: #8fa6ae;
+  font-size: 0.68rem;
+}
+
+.file-menu-separator {
+  height: 1px;
+  margin: 0.25rem 0.3rem;
+  background: rgba(147, 200, 220, 0.2);
+}
+
+.file-menu-section {
+  margin: 0.3rem 0.3rem 0.1rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid rgba(147, 200, 220, 0.2);
+  color: #8fa6ae;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* The trash, at the bottom of All files… */
+.file-picker-trash {
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid rgba(147, 200, 220, 0.2);
+}
+
+.file-picker-trash-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  color: #9fb3bb;
+  font-size: 0.68rem;
+}
+
+.file-picker-trash-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  opacity: 0.75;
+}
+
+.file-picker-restore,
+.file-picker-trash-empty {
+  border: 1px solid rgba(147, 200, 220, 0.3);
+  background: transparent;
+  color: #b9d3dc;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  padding: 0.16rem 0.55rem;
+  cursor: pointer;
+}
+
+.file-picker-trash-empty {
+  border-color: rgba(255, 110, 110, 0.35);
+  color: #ff9c9c;
+}
+
+.file-picker-restore:hover {
+  background: rgba(147, 200, 220, 0.14);
+}
+
+.file-picker-trash-empty:hover {
+  background: rgba(255, 90, 90, 0.14);
+}

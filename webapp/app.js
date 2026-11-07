@@ -26,7 +26,9 @@ import {
 import { openShareDialog } from './share-ui.js';
 import { OPEN_IN_MODULAR_EVENT } from './playground-link.js';
 import { showNotice } from './notice.js';
-import { clearAllDrafts } from './drafts.js';
+import { clearAllDrafts, getDraft } from './drafts.js';
+import * as files from './files.js';
+import * as disk from './disk-files.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -36,7 +38,7 @@ const sessionLabel = document.getElementById('session-label');
 const sessionOrderIndicator = document.getElementById('session-order-indicator');
 const sessionPrev = document.getElementById('session-prev');
 const sessionNext = document.getElementById('session-next');
-const newSessionBtn = document.getElementById('new-session');
+const fileMenuBtn = document.getElementById('file-menu-btn');
 const viewSelect = document.getElementById('view-select');
 const dropOverlay = document.getElementById('drop-overlay');
 const loadingOverlay = document.getElementById('loading-overlay');
@@ -45,7 +47,6 @@ const headerAppVersion = document.getElementById('header-app-version');
 const deleteSessionBtn = document.getElementById('delete-session');
 const refreshSessionBtn = document.getElementById('refresh-session');
 const editSessionBtn = document.getElementById('edit-session');
-const archiveBtn = document.getElementById('archive-btn');
 const shareBtn = document.getElementById('share-btn');
 const modularBtn = document.getElementById('modular-btn');
 const audioGate = document.getElementById('audio-gate');
@@ -305,13 +306,13 @@ function ensureSessionPicker() {
       <input
         class="session-picker-search"
         type="text"
-        placeholder="Search by filename or id"
-        aria-label="Search sessions"
+        placeholder="Search files"
+        aria-label="Search files"
       />
     </div>
     <div class="session-picker-list"></div>
     <div class="session-picker-footer">
-      <button type="button" class="session-picker-delete-all" title="Delete every session (.dsp and .lib)">Delete all sessions…</button>
+      <button type="button" class="session-picker-delete-all" title="Delete every file and every session (.dsp and .lib)">Delete all files…</button>
     </div>
   `;
   document.body.appendChild(picker);
@@ -355,19 +356,26 @@ function ensureSessionPicker() {
     sessionPickerListEl.addEventListener('click', async (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
-      const item = target.closest('.session-picker-item');
-      if (!item) return;
-      const sha = item.getAttribute('data-sha');
-      if (!sha) return;
-      if (sha === '__empty__') {
-        closeSessionPicker();
-        await loadEmptySession();
+      const restore = target.closest('[data-restore]');
+      if (restore) {
+        files.restoreFile(restore.getAttribute('data-restore'));
+        renderSessionPickerList(sessionPickerSearchInput ? sessionPickerSearchInput.value || '' : '');
         return;
       }
-      const index = state.sessions.findIndex((s) => s.sha1 === sha);
-      if (index < 0) return;
+      if (target.closest('[data-action="empty-trash"]')) {
+        const count = files.listTrash().length;
+        if (!count || !window.confirm(`Delete the ${count === 1 ? 'file' : `${count} files`} of the trash and their versions ?\nThis cannot be undone.`)) return;
+        await files.emptyTrash();
+        await loadSessions();
+        renderSessionPickerList(sessionPickerSearchInput ? sessionPickerSearchInput.value || '' : '');
+        return;
+      }
+      const item = target.closest('.session-picker-item');
+      if (!item) return;
+      const id = item.getAttribute('data-file');
+      if (!id) return;
       closeSessionPicker();
-      await loadSessionByIndex(index);
+      await openFile(id);
     });
   }
 }
@@ -394,8 +402,9 @@ async function deleteAllSessions() {
   closeSessionPicker();
   const count = state.sessions.length;
   if (count === 0) return;
+  const nfiles = files.listFiles().length + files.listTrash().length;
   const plural = count === 1 ? 'session' : `${count} sessions`;
-  if (!window.confirm(`Delete all ${plural} (.dsp and .lib)?\nThis cannot be undone.`)) return;
+  if (!window.confirm(`Delete all files (${nfiles}) and their versions (${plural}, .dsp and .lib)?\nThis cannot be undone.`)) return;
   showLoading();
   try {
     const response = await fetch('/api/sessions', { method: 'DELETE' });
@@ -444,6 +453,41 @@ function positionSessionPicker() {
 }
 
 /**
+ * The files of the list (spec_files_store.md) : the last saved first
+ * (chronological), or by the usage of their versions.
+ */
+function fileScore(file) {
+  let score = 0;
+  for (const sha of new Set(file.versions)) {
+    const s = state.sessions.find((x) => x.sha1 === sha);
+    if (s) score += Number(s.usageScore ?? s.usage_score) || 0;
+  }
+  return score;
+}
+
+function orderedFiles() {
+  const list = files.listFiles().slice();
+  if (state.sessionOrder === 'usage') return list.sort((a, b) => fileScore(b) - fileScore(a) || b.modified - a.modified);
+  return list.sort((a, b) => b.modified - a.modified);
+}
+
+/** Opens a file at a version (its current one by default). */
+async function openFile(id, version = -1) {
+  const sha = files.setOpen(id, version);
+  if (sha) await loadSessionBySha(sha);
+}
+
+/** Shows a session, the list of sessions reloaded if it is not in it yet. */
+async function loadSessionBySha(sha) {
+  let idx = state.sessions.findIndex((s) => s.sha1 === sha);
+  if (idx < 0) {
+    await loadSessions();
+    idx = state.sessions.findIndex((s) => s.sha1 === sha);
+  }
+  if (idx >= 0) await loadSessionByIndex(idx);
+}
+
+/**
  * Purpose: Implement `renderSessionPickerList` in the app flow.
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
@@ -457,69 +501,44 @@ function renderSessionPickerList(rawQuery = '', options = {}) {
     sessionPickerOrderUsageBtn.classList.toggle('active', state.sessionOrder === 'usage');
   }
   const query = String(rawQuery || '').trim().toLowerCase();
-  const sessions = getDisplayOrderedSessions().map((entry) => entry.session);
-  const filteredSessions = query
-    ? sessions.filter((s) => {
-      const idText = s.kind === 'live' ? `live:${s.sha1.slice(5, 13)}` : s.sha1.slice(0, 8);
-      return (
-        (s.filename || '').toLowerCase().includes(query)
-        || s.sha1.toLowerCase().includes(query)
-        || idText.toLowerCase().includes(query)
-      );
-    })
-    : sessions;
-  const showEmpty = !query || 'empty session'.includes(query);
-
-  if (!showEmpty && filteredSessions.length === 0) {
-    sessionPickerListEl.innerHTML = '<div class="session-picker-empty">No matching session</div>';
-    return;
-  }
+  const open = files.getOpen();
+  const list = orderedFiles().filter((f) => !query || f.name.toLowerCase().includes(query));
+  const trash = files.listTrash().filter((f) => !query || f.name.toLowerCase().includes(query));
   const rows = [];
-  if (showEmpty) {
-    const activeEmpty = !state.currentSha;
-    rows.push(`
-      <button
-        type="button"
-        class="session-picker-item${activeEmpty ? ' active' : ''}"
-        data-sha="__empty__"
-      >
-        <span class="session-picker-item-main-row">
-          <span class="session-picker-item-main">EMPTY | Drop .dsp</span>
-          <span class="session-picker-item-check" aria-hidden="true">${activeEmpty ? '✓' : ''}</span>
-        </span>
-        <span class="session-picker-item-meta">No active session</span>
-      </button>
-    `);
+  if (list.length === 0) {
+    rows.push(`<div class="session-picker-empty">${query ? 'No matching file' : 'No file yet : File ▸ New file, or drop a .dsp'}</div>`);
   }
-
-  rows.push(...filteredSessions.map((s) => {
-    const active = s.sha1 === state.currentSha;
-    const usedAt =
-      typeof s.last_used_time === 'number' && Number.isFinite(s.last_used_time)
-        ? s.last_used_time
-        : s.compilation_time;
-    const score =
-      typeof s.usage_score === 'number' && Number.isFinite(s.usage_score)
-        ? Math.round(s.usage_score)
-        : 0;
-    const details =
-      state.sessionOrder === 'usage'
-        ? `${s.kind === 'live' ? 'LIVE' : 'STATIC'} · score ${score}`
-        : `${s.kind === 'live' ? 'LIVE' : 'STATIC'} · created ${new Date(s.compilation_time).toLocaleString()}`;
+  rows.push(...list.map((f) => {
+    const active = !!open && open.file.id === f.id;
+    const count = f.versions.length;
+    const details = state.sessionOrder === 'usage'
+      ? `${count} version${count > 1 ? 's' : ''} · score ${Math.round(fileScore(f))}`
+      : `${count} version${count > 1 ? 's' : ''} · saved ${new Date(f.modified).toLocaleString()}`;
     return `
-      <button
-        type="button"
-        class="session-picker-item${active ? ' active' : ''}"
-        data-sha="${s.sha1}"
-      >
+      <button type="button" class="session-picker-item${active ? ' active' : ''}" data-file="${escapeHtml(f.id)}">
         <span class="session-picker-item-main-row">
-          <span class="session-picker-item-main">${escapeHtml(formatSessionEntryLabel(s))}</span>
+          <span class="session-picker-item-main">${escapeHtml(f.name)}</span>
           <span class="session-picker-item-check" aria-hidden="true">${active ? '✓' : ''}</span>
         </span>
         <span class="session-picker-item-meta">${escapeHtml(details)}</span>
       </button>
     `;
   }));
+  if (trash.length) {
+    rows.push(`
+      <div class="file-picker-trash">
+        <div class="file-picker-trash-title">
+          <span>Trash (${trash.length})</span>
+          <button type="button" class="file-picker-trash-empty" data-action="empty-trash">Empty trash…</button>
+        </div>
+        ${trash.map((f) => `
+          <div class="file-picker-trash-row">
+            <span class="session-picker-item-main">${escapeHtml(f.name)}</span>
+            <button type="button" class="file-picker-restore" data-restore="${escapeHtml(f.id)}">Restore</button>
+          </div>`).join('')}
+      </div>
+    `);
+  }
   sessionPickerListEl.innerHTML = rows.join('');
 
   if (autoCenter) {
@@ -735,9 +754,10 @@ async function switchView(viewId, options = {}) {
     const dspView = state.views.find((v) => v.id === 'dsp');
     const pending = dspView && typeof dspView.getPendingCode === 'function' ? dspView.getPendingCode() : null;
     if (pending !== null) {
+      const open = files.getOpen();
       const session = getCurrentSession();
-      const name = (session && session.filename) || 'patch.dsp';
-      const compiled = await submitCode(pending, name, { keepOnError: true, render: false });
+      const name = open ? open.file.name : (session && session.filename) || 'patch.dsp';
+      const compiled = await submitCode(pending, name, { keepOnError: true, render: false, fileId: open ? open.file.id : null });
       if (!compiled) {
         generateViewSelect(); // the view menu goes back to DSP Code
         return;
@@ -831,10 +851,7 @@ async function renderCurrentView(targetContainer = viewContainer) {
     const renderSession = renderSha
       ? state.sessions.find((s) => s.sha1 === renderSha) || null
       : null;
-    const sessionFilename =
-      renderSession && typeof renderSession.filename === 'string'
-        ? renderSession.filename
-        : '';
+    const sessionFilename = renderSession ? files.nameForSession(renderSession.sha1) : '';
     const scrollState = perSession || state.viewScroll[view.id];
     await view.render(renderTarget, {
       sha: renderSha,
@@ -949,9 +966,13 @@ async function renderCurrentView(targetContainer = viewContainer) {
       onSubmit: async (code, filename) => {
         // Used by the dsp editor view (Submit button / Cmd+S).
         // Falls back to the current session filename when none provided.
-        const name = (filename && filename.trim()) || sessionFilename || 'patch.dsp';
+        // Cmd/Ctrl-S : a new version of the open file, and its file of the
+        // disk written (with or without errors).
+        const open = files.getOpen();
+        const name = open ? open.file.name : (filename && filename.trim()) || sessionFilename || 'patch.dsp';
+        if (open) await writeDisk(open.file.id, code);
         // A failure leaves the editor dirty (its draft is kept).
-        if (!(await submitCode(code, name, { keepOnError: true }))) {
+        if (!(await submitCode(code, name, { keepOnError: true, fileId: open ? open.file.id : null }))) {
           throw new Error('not compiled');
         }
       }
@@ -978,7 +999,7 @@ async function renderCurrentView(targetContainer = viewContainer) {
  */
 async function loadSessions() {
   try {
-    const response = await fetch(`/api/sessions?limit=100&order=${encodeURIComponent(state.sessionOrder)}`);
+    const response = await fetch(`/api/sessions?limit=1000&order=${encodeURIComponent(state.sessionOrder)}`);
     const result = await response.json();
     if (!response.ok) {
       throw new Error(result.error || 'Failed to load sessions');
@@ -1009,65 +1030,73 @@ function refreshSessionIndex() {
  * Purpose: Implement `updateSessionNavigation` in the app flow.
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
-function updateSessionNavigation() {
-  const isEmpty = state.sessionIndex >= state.sessions.length || state.sessionIndex < 0;
-  const currentDisplayPos = getCurrentDisplayPosition();
-  const totalDisplayItems = state.sessions.length + 1;
+function updateSessionNavigation({ sync = true } = {}) {
+  const session = state.currentSha ? state.sessions.find((s) => s.sha1 === state.currentSha) || null : null;
+  // The open file follows the active session (MCP, a submit, another path).
+  // Not when only the files changed : the session about to be shown (a
+  // version chosen, a file just created) is not the current one yet.
+  const open = session ? (sync ? files.syncOpen(session.sha1) : files.getOpen()) : null;
 
-  if (isEmpty) {
-    // Empty session.
-    sessionLabel.textContent = 'Empty | Click ➕ or drop .dsp';
+  if (!session) {
+    sessionLabel.textContent = 'No file | File ▸ New file, or drop a .dsp';
+    sessionLabel.title = 'All files';
     sessionLabel.classList.add('clickable');
-    sessionPrev.disabled = currentDisplayPos >= totalDisplayItems - 1;
-    sessionNext.disabled = currentDisplayPos <= 0;
-    if (deleteSessionBtn) deleteSessionBtn.classList.add('hidden');
+    sessionPrev.disabled = true;
+    sessionNext.disabled = true;
     if (shareBtn) shareBtn.disabled = true;
     if (modularBtn) modularBtn.disabled = true;
     if (refreshSessionBtn) refreshSessionBtn.classList.add('hidden');
     if (editSessionBtn) editSessionBtn.classList.add('hidden');
   } else {
-    // Active session.
-    const session = state.sessions[state.sessionIndex];
-    const isLive = session.kind === 'live';
-    const isDraft = isDraftLiveSession(session);
-    const shortId = isLive
-      ? `live:${session.sha1.slice(5, 13)}`
-      : `${session.sha1.slice(0, 8)}…`;
-    sessionLabel.textContent = `${isLive ? 'LIVE | ' : ''}${shortId} | ${session.filename}${isDraft ? ' (draft)' : ''}`;
+    renderFileLabel(open, session);
     sessionLabel.classList.add('clickable');
-    sessionPrev.disabled = currentDisplayPos >= totalDisplayItems - 1;
-    sessionNext.disabled = currentDisplayPos <= 0;
-    if (deleteSessionBtn) deleteSessionBtn.classList.remove('hidden');
-    if (shareBtn) shareBtn.disabled = isLive;
-    if (modularBtn) modularBtn.disabled = isLive;
+    // ◀ ▶ : the versions of the open file
+    sessionPrev.disabled = !open || open.index <= 0;
+    sessionNext.disabled = !open || open.index >= open.count - 1;
+    if (shareBtn) shareBtn.disabled = false;
+    if (modularBtn) modularBtn.disabled = false;
     if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
-    if (editSessionBtn) {
-      if (isLive) {
-        editSessionBtn.classList.add('hidden');
-      } else {
-        editSessionBtn.classList.remove('hidden');
-      }
-    }
+    if (editSessionBtn) editSessionBtn.classList.remove('hidden');
   }
+  if (deleteSessionBtn) deleteSessionBtn.classList.add('hidden');
   generateViewSelect();
+}
+
+/**
+ * The header label : the open file, a dot when the shown version has
+ * unsaved changes (its draft), and the version shown among its versions.
+ */
+function renderFileLabel(open = files.getOpen(), session = null) {
+  const s = session || (state.currentSha ? state.sessions.find((x) => x.sha1 === state.currentSha) : null);
+  if (!s) return;
+  const name = open ? open.file.name : s.filename;
+  const dirty = getDraft(s.sha1) !== null;
+  const text = `${name}${dirty ? ' ●' : ''}${open ? ` · v${open.index + 1}/${open.count}` : ''}`;
+  if (sessionLabel.textContent !== text) sessionLabel.textContent = text;
+  const title = open
+    ? `${open.file.name} — version ${open.index + 1} of ${open.count}${dirty ? ', unsaved changes' : ''} (${s.sha1.slice(0, 8)}). Click : all files ; ◀ ▶ : versions.`
+    : `${s.filename} (${s.sha1.slice(0, 8)})`;
+  if (sessionLabel.title !== title) sessionLabel.title = title;
 }
 /**
  * Purpose: Implement `navigateToPrevious` in the app flow.
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
 async function navigateToPrevious() {
-  const currentDisplayPos = getCurrentDisplayPosition();
-  const target = currentDisplayPos + 1;
-  await loadSessionAtDisplayPosition(target);
+  await stepVersion(-1);
 }
-/**
- * Purpose: Implement `navigateToNext` in the app flow.
- * How: Reads and updates UI, session, and backend sync state for this step.
- */
+
+/** ▶ : the next version of the open file. */
 async function navigateToNext() {
-  const currentDisplayPos = getCurrentDisplayPosition();
-  const target = currentDisplayPos - 1;
-  await loadSessionAtDisplayPosition(target);
+  await stepVersion(1);
+}
+
+async function stepVersion(delta) {
+  const open = files.getOpen();
+  if (!open) return;
+  const target = open.index + delta;
+  if (target < 0 || target >= open.count) return;
+  await openFile(open.file.id, target);
 }
 /**
  * Purpose: Implement `loadSessionByIndex` in the app flow.
@@ -1126,6 +1155,7 @@ async function loadEmptySession(options = {}) {
   captureScrollLine();
   state.currentSha = null;
   state.sessionIndex = state.sessions.length;
+  files.closeOpen();
   if (resetView || !state.views.some((v) => v.id === state.currentView)) {
     state.currentView = 'dsp';
   }
@@ -1307,7 +1337,7 @@ async function unlockAudioGate() {
  * Purpose: Implement `submitCode` in the app flow.
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
-async function submitCode(code, filename, { keepOnError = false, render = true } = {}) {
+async function submitCode(code, filename, { keepOnError = false, render = true, fileId = null } = {}) {
   // keepOnError (code typed in an editor) : a DSP that does not compile is
   //   not stored, so stay on the current session — the text remains in the
   //   editor, unsaved — instead of switching to a session that does not exist.
@@ -1324,10 +1354,12 @@ async function submitCode(code, filename, { keepOnError = false, render = true }
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ code, filename })
+      // fileId : a save of this file (a new version of it, whatever its name)
+      body: JSON.stringify({ code, filename, fileId })
     });
 
     const result = await response.json();
+    state.lastSubmit = result;
 
     if (!response.ok) {
       throw new Error(result.error || 'Submission failed');
@@ -1557,7 +1589,7 @@ if (shareBtn) {
       const code = await response.text();
       await openShareDialog({
         code,
-        filename: session.filename,
+        filename: files.nameForSession(session.sha1),
         poly: state.runGlobal.polyVoices || 0,
       });
     } catch (err) {
@@ -1577,21 +1609,10 @@ if (modularBtn) {
       if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
       const code = await response.text();
       document.dispatchEvent(new CustomEvent(OPEN_IN_MODULAR_EVENT, {
-        detail: { sha1: state.currentSha, code, filename: session.filename },
+        detail: { sha1: state.currentSha, code, filename: files.nameForSession(session.sha1) },
       }));
     } catch (err) {
       showError(`faustmodular: ${err.message}`);
-    }
-  });
-}
-
-if (archiveBtn) {
-  archiveBtn.addEventListener('click', async () => {
-    try {
-      await downloadFromUrl('/api/download/archive/dsp', 'faustcode-dsp-archive.tar.gz', 'Archive failed');
-      hideError();
-    } catch (err) {
-      showError(`Error: ${err.message}`);
     }
   });
 }
@@ -1858,7 +1879,8 @@ async function submitNewBlankPatch() {
   const response = await fetch('/api/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: STARTER_DSP, filename: 'untitled.dsp' }),
+    // a new file : a name not taken yet
+    body: JSON.stringify({ code: STARTER_DSP, filename: files.uniqueName('untitled.dsp') }),
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result || typeof result.sha1 !== 'string') {
@@ -1875,19 +1897,254 @@ async function submitNewBlankPatch() {
   return result.sha1;
 }
 
-if (newSessionBtn) {
-  newSessionBtn.addEventListener('click', async () => {
-    showLoading();
-    hideError();
-    try {
-      await submitNewBlankPatch();
-    } catch (err) {
-      showError(`New patch: ${err.message}`);
-    } finally {
-      hideLoading();
+// ---------------------------------------------------------------------
+// The File menu (spec_files_store.md, « Les surfaces »)
+// ---------------------------------------------------------------------
+
+let fileMenuEl = null;
+let fileMenuCloser = null;
+
+/** The text of the open file as shown : the editor's unsaved text, else the version shown. */
+function shownText(open = files.getOpen()) {
+  if (!open) return null;
+  const dspView = state.views.find((v) => v.id === 'dsp');
+  const pending = state.currentView === 'dsp' && dspView && typeof dspView.getPendingCode === 'function'
+    ? dspView.getPendingCode()
+    : null;
+  if (pending !== null) return pending;
+  const draft = getDraft(open.sha);
+  if (draft !== null) return draft;
+  const s = state.sessions.find((x) => x.sha1 === open.sha);
+  return s && typeof s.code === 'string' ? s.code : null;
+}
+
+async function sessionCode(sha) {
+  try {
+    const r = await fetch(`/api/${sha}/user_code.dsp`);
+    return r.ok ? await r.text() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Writes the file of the disk of a file, if it has one (Chromium). */
+async function writeDisk(fileId, text) {
+  if (!disk.hasFileAccess() || typeof text !== 'string') return;
+  try {
+    const name = await disk.writeIfHandle(fileId, text);
+    if (name) showNotice(`Saved to ${name}`, 2500);
+  } catch (err) {
+    showNotice(`Not written to the disk : ${err && err.message ? err.message : err}`, 8000);
+  }
+}
+
+/** Save : a new version of the open file (and its file of the disk written). */
+async function saveOpenFile() {
+  const open = files.getOpen();
+  if (!open) return;
+  const text = shownText(open) ?? (await sessionCode(open.sha));
+  if (text === null) return;
+  await writeDisk(open.file.id, text);
+  const dspView = state.views.find((v) => v.id === 'dsp');
+  const head = open.index === open.count - 1;
+  const dirty = getDraft(open.sha) !== null || (state.currentView === 'dsp' && dspView && dspView.getPendingCode && dspView.getPendingCode() !== null);
+  if (!dirty && head) return;
+  // an older version saved again becomes the current one
+  if (await submitCode(text, open.file.name, { keepOnError: true, fileId: open.file.id })) {
+    if (dspView && typeof dspView.markSubmitted === 'function') dspView.markSubmitted(text);
+  }
+}
+
+/** Save as… : a new file at the text shown ; with the API, a file of the disk chosen and written. */
+async function saveOpenFileAs() {
+  const open = files.getOpen();
+  if (!open) return;
+  const text = shownText(open) ?? (await sessionCode(open.sha));
+  if (text === null) return;
+  try {
+    let handle = null;
+    let chosen;
+    if (disk.hasFileAccess()) {
+      handle = await disk.pickSave(open.file.name);
+      if (!handle) return;
+      await disk.writeHandle(handle, text);
+      chosen = handle.name;
+    } else {
+      chosen = window.prompt('Save as', open.file.name);
+      if (!chosen) return;
     }
+    const name = files.uniqueName(chosen);
+    if (!handle) disk.download(name, text);
+    if (await submitCode(text, name, { keepOnError: true })) {
+      const dspView = state.views.find((v) => v.id === 'dsp');
+      if (dspView && typeof dspView.markSubmitted === 'function') dspView.markSubmitted(text);
+      if (handle && state.lastSubmit && state.lastSubmit.fileId) await disk.setHandle(state.lastSubmit.fileId, handle);
+    }
+  } catch (err) {
+    showError(`Save as : ${err && err.message ? err.message : err}`);
+  }
+}
+
+/** Open… : a .dsp or .lib of the disk (its handle kept with the API). */
+async function openFromDisk() {
+  if (!disk.hasFileAccess()) {
+    fileInput.click();
+    return;
+  }
+  try {
+    const picked = await disk.pickOpen();
+    if (!picked) return;
+    if (await submitCode(picked.text, picked.name)) {
+      if (state.lastSubmit && state.lastSubmit.fileId) await disk.setHandle(state.lastSubmit.fileId, picked.handle);
+    }
+  } catch (err) {
+    showError(`Open : ${err && err.message ? err.message : err}`);
+  }
+}
+
+function renameOpenFile() {
+  const open = files.getOpen();
+  if (!open) return;
+  const name = window.prompt('Rename the file', open.file.name);
+  if (!name || name === open.file.name) return;
+  try {
+    files.renameFile(open.file.id, name);
+  } catch (err) {
+    showError(`Rename : ${err && err.message ? err.message : err}`);
+  }
+}
+
+/** Move to trash : the open file goes to the trash (restorable from All files…), the last saved file opens. */
+async function trashOpenFile() {
+  const open = files.getOpen();
+  if (!open) return;
+  files.trashFile(open.file.id);
+  showNotice(`${open.file.name} moved to the trash (All files… to restore it).`);
+  const next = orderedFiles()[0];
+  if (next) await openFile(next.id);
+  else await loadEmptySession();
+}
+
+async function newFile() {
+  showLoading();
+  hideError();
+  try {
+    await submitNewBlankPatch();
+  } catch (err) {
+    showError(`New file : ${err.message}`);
+  } finally {
+    hideLoading();
+  }
+}
+
+function closeFileMenu() {
+  if (!fileMenuEl) return;
+  fileMenuEl.remove();
+  fileMenuEl = null;
+  if (fileMenuCloser) {
+    document.removeEventListener('pointerdown', fileMenuCloser, true);
+    document.removeEventListener('keydown', fileMenuCloser, true);
+    fileMenuCloser = null;
+  }
+}
+
+function openFileMenu() {
+  closeSessionPicker();
+  closeFileMenu();
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+  const k = (key, shift = false) => `${shift ? (mac ? '⇧' : 'Shift-') : ''}${mac ? '⌘' : 'Ctrl-'}${key}`;
+  const open = files.getOpen();
+  const recent = orderedFiles().slice().sort((a, b) => b.modified - a.modified).slice(0, 8);
+  const items = [
+    { label: 'New file', action: newFile },
+    { label: 'Open…', key: k('O'), action: openFromDisk },
+    { label: 'All files…', action: () => openSessionPicker() },
+    { separator: true, title: recent.length ? 'Recent files' : '' },
+    ...recent.map((f) => ({ label: f.name, recent: true, checked: !!open && open.file.id === f.id, action: () => openFile(f.id) })),
+    { separator: true },
+    { label: 'Save', key: k('S'), action: saveOpenFile, disabled: !open },
+    { label: 'Save as…', key: k('S', true), action: saveOpenFileAs, disabled: !open },
+    { label: 'Rename…', action: renameOpenFile, disabled: !open },
+    { label: 'Move to trash', action: trashOpenFile, disabled: !open },
+  ];
+  const menu = document.createElement('div');
+  menu.className = 'file-menu';
+  menu.setAttribute('role', 'menu');
+  for (const item of items) {
+    if (item.separator) {
+      const sep = document.createElement('div');
+      sep.className = item.title ? 'file-menu-section' : 'file-menu-separator';
+      sep.textContent = item.title || '';
+      menu.appendChild(sep);
+      continue;
+    }
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'file-menu-item' + (item.recent ? ' recent' : '');
+    b.setAttribute('role', 'menuitem');
+    b.disabled = !!item.disabled;
+    const label = document.createElement('span');
+    label.textContent = (item.recent ? (item.checked ? '✓ ' : '  ') : '') + item.label;
+    const key = document.createElement('span');
+    key.className = 'file-menu-key';
+    key.textContent = item.key || '';
+    b.append(label, key);
+    b.addEventListener('click', () => {
+      closeFileMenu();
+      void item.action();
+    });
+    menu.appendChild(b);
+  }
+  document.body.appendChild(menu);
+  const r = fileMenuBtn.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${r.bottom + 6}px`;
+  fileMenuEl = menu;
+  fileMenuCloser = (e) => {
+    if (e.type === 'keydown') {
+      if (e.key === 'Escape') { e.preventDefault(); closeFileMenu(); }
+      return;
+    }
+    if (menu.contains(e.target) || fileMenuBtn.contains(e.target)) return;
+    closeFileMenu();
+  };
+  document.addEventListener('pointerdown', fileMenuCloser, true);
+  document.addEventListener('keydown', fileMenuCloser, true);
+}
+
+if (fileMenuBtn) {
+  fileMenuBtn.addEventListener('click', () => {
+    if (fileMenuEl) closeFileMenu();
+    else openFileMenu();
   });
 }
+
+// Cmd/Ctrl-O : Open… ; Shift-Cmd/Ctrl-S : Save as… ; Cmd/Ctrl-S outside an
+// editor (an editor saves by itself, and stops the event) : Save.
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || !(e.metaKey || e.ctrlKey) || e.altKey) return;
+  const key = e.key.toLowerCase();
+  if (key === 'o' && !e.shiftKey) {
+    e.preventDefault();
+    void openFromDisk();
+  } else if (key === 's' && e.shiftKey) {
+    e.preventDefault();
+    void saveOpenFileAs();
+  } else if (key === 's') {
+    e.preventDefault();
+    void saveOpenFile();
+  }
+});
+
+// The files changed (a save, another tab, MCP) : the header and the list follow.
+files.onFilesChange(() => {
+  updateSessionNavigation({ sync: false });
+  if (sessionPickerOpen) {
+    renderSessionPickerList(sessionPickerSearchInput ? sessionPickerSearchInput.value || '' : '');
+  }
+});
+// The dot of unsaved changes follows the typing.
+setInterval(() => renderFileLabel(), 600);
 
 if (editSessionBtn) {
   editSessionBtn.addEventListener('click', async () => {
@@ -1900,7 +2157,7 @@ if (editSessionBtn) {
     // flow. The faustcode webapp listens for this event and routes
     // the action to its floating overlay editor.
     const interceptable = new CustomEvent('faustcode:edit-request', {
-      detail: { sha1: session.sha1, filename: session.filename },
+      detail: { sha1: session.sha1, filename: files.nameForSession(session.sha1) },
       bubbles: true,
       cancelable: true,
     });

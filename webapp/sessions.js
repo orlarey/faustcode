@@ -121,6 +121,12 @@ export async function storeSession(entry) {
   }
 }
 
+// Listeners of deleted sessions (files.js : the session leaves the versions).
+const _deletedListeners = [];
+export function onSessionDeleted(cb) {
+  _deletedListeners.push(cb);
+}
+
 export async function deleteSession(sha1) {
   const had = STORE.delete(sha1);
   try {
@@ -128,7 +134,21 @@ export async function deleteSession(sha1) {
   } catch (err) {
     console.warn('[sessions] OPFS deleteSession failed for', sha1, err);
   }
+  for (const cb of _deletedListeners) {
+    try { cb(sha1); } catch (err) { console.warn('[sessions] deleted listener failed', err); }
+  }
   return had;
+}
+
+/**
+ * Sessions written by another tab : read the ones this tab does not know
+ * yet. Called when another tab says its files changed. (A session deleted
+ * there stays in this cache until the next load : harmless, no file
+ * references it.)
+ */
+export async function refreshSessionsFromDisk() {
+  const entries = await opfs.loadAllSessions();
+  for (const e of entries) if (!STORE.has(e.sha1)) STORE.set(e.sha1, e);
 }
 
 // Debounce window per sha1 — matches the Docker faustforge behaviour

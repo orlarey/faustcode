@@ -39,6 +39,7 @@ import {
 import { getFaust } from './faust.js';
 import { injectLibsIntoFs, isLibFilename, LIB_INCLUDE_ARG } from './lib-inject.js';
 import { announceSubmit } from './playground-link.js';
+import { attachSubmission, libSessionsForCompile, normalizeSource, clearFiles } from './files.js';
 
 // ---------------------------------------------------------------------
 // Shared in-memory state (mirrors the Docker /api/state model).
@@ -117,13 +118,17 @@ function safeSessionName(name) {
   throw new Error(`Unsupported file extension : ${trimmed} (only .dsp and .lib are accepted)`);
 }
 
-async function compileAndStore(code, filename) {
+async function compileAndStore(rawCode, filename, fileId = null) {
+  // The source as faustcode keeps it (spec_files_store.md, « Identité des
+  // codes ») : CRLF and lone CR become LF, so the sha1 is that of faustmodular.
+  const code = normalizeSource(rawCode);
   const fname = safeSessionName(filename);
   const sha1 = await sha1Hex(code);
   const existing = getSession(sha1);
   if (existing) {
+    const file = attachSubmission(sha1, fname, fileId);
     shimSetActiveSha(sha1);
-    return { sha1, errors: existing.errors };
+    return { sha1, errors: existing.errors, fileId: file ? file.id : null };
   }
 
   const faust = await getFaust();
@@ -131,15 +136,11 @@ async function compileAndStore(code, filename) {
   const fs = compiler.fs();
   const name = 'session';
 
-  // .lib : enforce single-instance-per-filename + persist as-is
-  // (libraries don't have a `process =`, so the SVG / signals / tasks
-  // sanity check would fail on them and we'd lose a valid file).
+  // .lib : persisted as-is (libraries don't have a `process =`, so the
+  // SVG sanity check would fail on them and we'd lose a valid file). Its
+  // file keeps its versions ; only the current one is given to the
+  // compiler (files.js, libSessionsForCompile).
   if (isLibFilename(fname)) {
-    for (const s of listSessions()) {
-      if (s.sha1 !== sha1 && s.filename === fname && isLibFilename(s.filename)) {
-        await deleteSession(s.sha1);
-      }
-    }
     await storeSession({
       sha1,
       filename: fname,
@@ -151,14 +152,15 @@ async function compileAndStore(code, filename) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
+    const file = attachSubmission(sha1, fname, fileId);
     shimSetActiveSha(sha1);
-    return { sha1, errors: '' };
+    return { sha1, errors: '', fileId: file ? file.id : null };
   }
 
   // Inject any current .lib sessions into the dedicated user libs
   // dir ; LIB_INCLUDE_ARG (below) makes Faust search there before
   // falling back to the stock /usr/share/faust/ libs.
-  injectLibsIntoFs(fs, listSessions());
+  injectLibsIntoFs(fs, libSessionsForCompile());
 
   for (const p of [`/${name}-sig.dot`, `/${name}.dot`]) tryUnlink(fs, p);
   try {
@@ -190,6 +192,7 @@ async function compileAndStore(code, filename) {
     }
   }
 
+  let file = null;
   if (errors === '') {
     await storeSession({
       sha1,
@@ -202,10 +205,11 @@ async function compileAndStore(code, filename) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
+    file = attachSubmission(sha1, fname, fileId);
     shimSetActiveSha(sha1);
   }
 
-  return { sha1, errors };
+  return { sha1, errors, fileId: file ? file.id : null };
 }
 
 // ---------------------------------------------------------------------
@@ -246,9 +250,11 @@ async function handleSubmit(init) {
   try {
     const previous = getActiveSha1();
     const edited = globalThis.__faustEditorBus ? globalThis.__faustEditorBus.sha : null;
-    const { sha1, errors } = await compileAndStore(code, parsed.filename || 'patch.dsp');
-    announceSubmit({ sha1, previous, edited, code, filename: parsed.filename || 'patch.dsp', errors });
-    return ok({ sha1, errors });
+    const fileId = typeof parsed.fileId === 'string' ? parsed.fileId : null;
+    const result = await compileAndStore(code, parsed.filename || 'patch.dsp', fileId);
+    const { sha1, errors } = result;
+    announceSubmit({ sha1, previous, edited, code: normalizeSource(code), filename: parsed.filename || 'patch.dsp', errors });
+    return ok({ sha1, errors, fileId: result.fileId });
   } catch (err) {
     return fail(String(err && err.message ? err.message : err));
   }
@@ -297,6 +303,7 @@ async function handleDelete(sha) {
 async function handleDeleteAll() {
   const all = listSessions();
   for (const s of all) await deleteSession(s.sha1);
+  clearFiles();
   setActiveSha1(null);
   bumpUpdatedAt();
   return ok({ deleted: all.length });
@@ -426,7 +433,7 @@ async function handleVersion() {
 }
 
 function handleAppVersion() {
-  return ok({ version: '0.15.0' });
+  return ok({ version: '0.16.0' });
 }
 
 function handleFaustHelp() {
