@@ -49,7 +49,7 @@ import { writeIfHandle, hasFileAccess } from './disk-files.js';
 // editor (dsp view, floating overlay…) is created, so they auto-join.
 import { bus as editorBus } from './editor-sync.js';
 
-const WEBAPP_VERSION = '0.18.3';
+const WEBAPP_VERSION = '0.18.4';
 
 // 1. Synchronously install the fetch shim BEFORE any view code runs.
 installApiShim();
