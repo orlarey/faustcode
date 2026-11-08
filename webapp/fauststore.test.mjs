@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  FAUSTSTORE_VERSION, storeLink, withoutStoreLink, parseFileUrl, sha1, StoreReader, gitBlobSha,
+  FAUSTSTORE_VERSION, storeLink, withoutStoreLink, parseFileUrl, sha1, StoreReader, gitBlobSha, buildIndex, serializeIndex, parseIndex,
 } from './vendor/fauststore/fauststore.js';
 import { normalizeSource } from './file-index.js';
 
@@ -48,4 +48,14 @@ test('a store read from its index and its tree', async () => {
   const store = await new StoreReader(fetch).open({ owner: 'o', repo: 'r', ref: null });
   assert.equal(store.manifest.name, 'Test');
   assert.deepEqual(store.index.modules.map((m) => m.name), ['Drone']);
+});
+
+test('the materials of a store stay in its index when faustcode publishes (the index made again)', async () => {
+  const fiche = JSON.stringify({ format: 'fauststore-material', version: 1, kind: 'recording', name: 'Nappe-1', media: { path: 'Nappe-1.flac', type: 'audio/flac' }, recordingOf: 'scenes/Nappe/Nappe.jfaust' });
+  const files = { 'scenes/Nappe/Nappe.jfaust': '{}', 'materials/Nappe-1/Nappe-1.json': fiche, 'materials/Nappe-1/Nappe-1.flac': 'fLaC' };
+  const tree = await Promise.all(Object.entries(files).map(async ([path, c]) => ({ path, sha: await gitBlobSha(c) })));
+  const index = await buildIndex(tree, null, async (path) => files[path]);
+  const again = parseIndex(JSON.parse(serializeIndex(index, '2026-11-08T00:00:00Z')));
+  assert.deepEqual(again.materials.map((m) => [m.path, m.recordingOf, m.media.path]), [['materials/Nappe-1/Nappe-1.json', 'scenes/Nappe/Nappe.jfaust', 'materials/Nappe-1/Nappe-1.flac']]);
+  assert.deepEqual(again.scenes[0].recordings, ['materials/Nappe-1/Nappe-1.json']);
 });

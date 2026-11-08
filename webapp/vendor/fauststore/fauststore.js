@@ -77,37 +77,91 @@ var date = (v) => typeof v == "string" && v.length < 40 ? v : void 0;
 function parseIndex(json) {
 	const x = json;
 	if (!x || x.format != "fauststore-index" || !Array.isArray(x.modules) || !Array.isArray(x.scenes)) return null;
-	return {
-		modules: x.modules.filter((m) => m && safePath(m.path) && /\.dsp$/i.test(m.path)).map((m) => ({
-			path: m.path,
-			name: text(m.name, 200) || nameOfPath(m.path),
-			author: text(m.author, 200),
-			license: text(m.license, 100),
-			summary: text(m.summary, 500) ?? "",
-			description: text(m.description, 5e3) ?? "",
-			functions: texts(m.functions),
-			inlets: texts(m.inlets),
-			outlets: texts(m.outlets),
-			code: sha(m.code),
-			sha: sha(m.sha),
-			updated: date(m.updated),
-			versions: Array.isArray(m.versions) ? m.versions.filter((v) => v && sha(v.code) && sha(v.commit)).map((v) => ({
-				code: v.code,
-				commit: v.commit,
-				date: date(v.date)
-			})) : void 0
-		})),
-		scenes: x.scenes.filter((s) => s && safePath(s.path) && /\.(jfaust|json)$/i.test(s.path)).map((s) => ({
-			path: s.path,
-			name: text(s.name, 200) || nameOfPath(s.path),
-			summary: text(s.summary, 500),
-			author: text(s.author, 200),
-			preview: safePath(s.preview) ? s.preview : void 0,
-			sha: sha(s.sha),
-			updated: date(s.updated),
-			codes: Array.isArray(s.codes) ? s.codes.filter((c) => sha(c)) : void 0
-		}))
+	const modules = x.modules.filter((m) => m && safePath(m.path) && /\.dsp$/i.test(m.path)).map((m) => ({
+		path: m.path,
+		name: text(m.name, 200) || nameOfPath(m.path),
+		author: text(m.author, 200),
+		license: text(m.license, 100),
+		summary: text(m.summary, 500) ?? "",
+		description: text(m.description, 5e3) ?? "",
+		functions: texts(m.functions),
+		inlets: texts(m.inlets),
+		outlets: texts(m.outlets),
+		code: sha(m.code),
+		sha: sha(m.sha),
+		updated: date(m.updated),
+		versions: Array.isArray(m.versions) ? m.versions.filter((v) => v && sha(v.code) && sha(v.commit)).map((v) => ({
+			code: v.code,
+			commit: v.commit,
+			date: date(v.date)
+		})) : void 0
+	}));
+	const scenes = x.scenes.filter((s) => s && safePath(s.path) && /\.(jfaust|json)$/i.test(s.path)).map((s) => ({
+		path: s.path,
+		name: text(s.name, 200) || nameOfPath(s.path),
+		summary: text(s.summary, 500),
+		author: text(s.author, 200),
+		preview: safePath(s.preview) ? s.preview : void 0,
+		sha: sha(s.sha),
+		updated: date(s.updated),
+		codes: Array.isArray(s.codes) ? s.codes.filter((c) => sha(c)) : void 0,
+		recordings: Array.isArray(s.recordings) ? s.recordings.filter((m) => safePath(m)) : void 0
+	}));
+	const materials = Array.isArray(x.materials) ? x.materials.map((m) => m && safePath(m.path) ? parseMaterial(m, m.path, sha(m.sha)) : null).filter((m) => !!m) : void 0;
+	return materials ? {
+		modules,
+		scenes,
+		materials
+	} : {
+		modules,
+		scenes
 	};
+}
+var num = (v) => typeof v == "number" && Number.isFinite(v) ? v : void 0;
+function parseMaterial(json, path, blob) {
+	const m = json;
+	if (!m || !safePath(path) || !/^materials\/.+\.json$/i.test(path)) return null;
+	if (m.format !== void 0 && m.format != "fauststore-material") return null;
+	const dir = path.slice(0, path.lastIndexOf("/") + 1);
+	const mediaPath = typeof m.media?.path == "string" ? m.media.path.includes("/") ? m.media.path : dir + m.media.path : void 0;
+	const out = {
+		path,
+		name: text(m.name, 200) || nameOfPath(path),
+		kind: text(m.kind, 40) ?? "recording",
+		media: mediaPath && safePath(mediaPath) ? {
+			path: mediaPath,
+			type: text(m.media.type, 60) ?? "application/octet-stream",
+			sha1: sha(m.media.sha1),
+			size: num(m.media.size)
+		} : void 0,
+		sampleRate: num(m.sampleRate),
+		channels: num(m.channels),
+		frames: num(m.frames),
+		recordingOf: safePath(m.recordingOf) ? m.recordingOf : void 0,
+		from: m.from && safePath(m.from.path) ? {
+			store: text(m.from.store, 200),
+			path: m.from.path,
+			sha1: sha(m.from.sha1),
+			commit: sha(m.from.commit)
+		} : void 0,
+		generator: text(m.generator, 100),
+		timeline: m.timeline && [
+			m.timeline.tempo,
+			m.timeline.meter,
+			m.timeline.startTick,
+			m.timeline.lengthTicks
+		].every((v) => num(v) !== void 0) ? {
+			tempo: m.timeline.tempo,
+			meter: m.timeline.meter,
+			startTick: m.timeline.startTick,
+			lengthTicks: m.timeline.lengthTicks
+		} : void 0,
+		live: Array.isArray(m.live) ? texts(m.live) : void 0,
+		date: date(m.date),
+		sha: blob
+	};
+	if (!out.recordingOf && out.from && !out.from.store) out.recordingOf = out.from.path;
+	return out;
 }
 function nameOfPath(path) {
 	return path.split("/").pop().replace(/\.[^.]*$/, "");
@@ -136,7 +190,8 @@ function contentsOf(paths) {
 	const safe = paths.filter(safePath);
 	return {
 		modules: safe.filter((p) => p.startsWith("modules/") && /\.dsp$/i.test(p)).sort(),
-		scenes: safe.filter((p) => p.startsWith("scenes/") && /\.jfaust$/i.test(p)).sort()
+		scenes: safe.filter((p) => p.startsWith("scenes/") && /\.jfaust$/i.test(p)).sort(),
+		materials: safe.filter((p) => /^materials\/[^/]+\/[^/]+\.json$/i.test(p)).sort()
 	};
 }
 function slug(name) {
@@ -144,6 +199,7 @@ function slug(name) {
 }
 var modulePath = (name) => `modules/${slug(name)}/${slug(name)}.dsp`;
 var scenePath = (name) => `scenes/${slug(name)}/${slug(name)}.jfaust`;
+var materialPath = (name) => `materials/${slug(name)}/${slug(name)}.json`;
 async function gitBlobSha(text) {
 	const body = new TextEncoder().encode(text);
 	const head = new TextEncoder().encode(`blob ${body.length}\0`);
@@ -160,7 +216,11 @@ function serializeIndex(index, updated) {
 		version: 1,
 		updated,
 		modules: index.modules.map(clean),
-		scenes: index.scenes.map(clean)
+		scenes: index.scenes.map(clean),
+		...index.materials?.length ? { materials: index.materials.map((m) => clean({
+			...m,
+			media: m.media && clean(m.media)
+		})) } : {}
 	}, null, 1) + "\n";
 }
 // src/model/ModuleCode.ts
@@ -208,7 +268,7 @@ function sceneNameIn(content) {
 async function buildIndex(tree, before, read, changes) {
 	const shas = new Map(tree.map((e) => [e.path, e.sha]));
 	for (const path of changes?.files.keys() ?? []) if (!shas.has(path)) shas.set(path, void 0);
-	const { modules, scenes } = contentsOf([...shas.keys()]);
+	const { modules, scenes, materials } = contentsOf([...shas.keys()]);
 	const previous = new Map((before?.modules ?? []).map((m) => [m.path, m]));
 	const previousScenes = new Map((before?.scenes ?? []).map((s) => [s.path, s]));
 	const builtModules = await Promise.all(modules.map(async (path) => {
@@ -275,10 +335,33 @@ async function buildIndex(tree, before, read, changes) {
 		}
 		return entry;
 	}));
-	return {
+	const previousMaterials = new Map((before?.materials ?? []).map((m) => [m.path, m]));
+	const kept = (await Promise.all(materials.map(async (path) => {
+		const old = previousMaterials.get(path);
+		const published = changes?.files.get(path);
+		if (published === void 0 && old && old.sha && old.sha == shas.get(path)) return old;
+		let content;
+		try {
+			content = published ?? await read(path);
+		} catch {
+			return null;
+		}
+		try {
+			return parseMaterial(JSON.parse(content), path, await gitBlobSha(content));
+		} catch {
+			return null;
+		}
+	}))).filter((m) => m !== null);
+	for (const scene of builtScenes) {
+		const recordings = kept.filter((m) => m.recordingOf == scene.path).map((m) => m.path);
+		scene.recordings = recordings.length ? recordings : void 0;
+	}
+	const index = {
 		modules: builtModules.filter((m) => m !== null),
 		scenes: builtScenes
 	};
+	if (kept.length) index.materials = kept;
+	return index;
 }
 // src/store/StoreReader.ts
 var GITHUB = {
@@ -378,6 +461,11 @@ var StoreReader = class {
 	}
 };
 // src/store/StorePublisher.ts
+function base64(bytes) {
+	let bin = "";
+	for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode(...bytes.subarray(i, i + 32768));
+	return btoa(bin);
+}
 var PublishError = class extends Error {
 	constructor(reason, message) {
 		super(message);
@@ -439,16 +527,32 @@ var StorePublisher = class {
 			const branch = await this.branch(ref, token, name);
 			const { files, message } = await make(branch);
 			const base = (await this.call(ref, token, `/git/commits/${branch.commit}`)).tree.sha;
+			const entries = await Promise.all(files.map(async (f) => {
+				if ("content" in f) return {
+					path: f.path,
+					mode: "100644",
+					type: "blob",
+					content: f.content
+				};
+				const blob = await this.call(ref, token, "/git/blobs", {
+					method: "POST",
+					body: {
+						content: base64(f.bytes),
+						encoding: "base64"
+					}
+				});
+				return {
+					path: f.path,
+					mode: "100644",
+					type: "blob",
+					sha: blob.sha
+				};
+			}));
 			const tree = await this.call(ref, token, "/git/trees", {
 				method: "POST",
 				body: {
 					base_tree: base,
-					tree: files.map((f) => ({
-						path: f.path,
-						mode: "100644",
-						type: "blob",
-						content: f.content
-					}))
+					tree: entries
 				}
 			});
 			const commit = await this.call(ref, token, "/git/commits", {
@@ -666,6 +770,7 @@ var StoreTokens = class StoreTokens {
 		return Object.keys(this.all());
 	}
 };
+var MAX_MEDIA = 52428800;
 function shareLink(app, ref, commit, path) {
 	return `${app}?scene=https://github.com/${ref.owner}/${ref.repo}/blob/${commit}/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
@@ -725,16 +830,20 @@ var Publishing = class {
 				before = parseIndex(JSON.parse(await this.stores.reader.text(at, STORE_INDEX, token)));
 			} catch {}
 			const date = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d+Z$/, "Z");
+			const texts = new Map([...files].filter((e) => typeof e[1] == "string"));
 			index = await buildIndex(branch.tree, before, (path) => this.stores.reader.text(at, path, token), {
-				files,
+				files: texts,
 				parent: branch.commit,
 				date
 			});
 			return {
-				files: [...[...files].map(([path, content]) => ({
+				files: [...[...files].map(([path, content]) => typeof content == "string" ? {
 					path,
 					content
-				})), {
+				} : {
+					path,
+					bytes: content
+				}), {
 					path: STORE_INDEX,
 					content: serializeIndex(index, date)
 				}],
@@ -764,6 +873,49 @@ var Publishing = class {
 			modules: [...modules.keys()]
 		};
 	}
+	async publishRecording(store, name, content, modules, recording) {
+		if (recording.flac.length > 52428800) throw new Error(`the recording is ${Math.round(recording.flac.length / 1048576)} MB (50 MB at most in a store)`);
+		const path = scenePath(name);
+		const replaced = await this.exists(store, path);
+		const description = materialPath(recording.name);
+		const dir = description.slice(0, description.lastIndexOf("/") + 1);
+		const media = dir + description.slice(dir.length).replace(/\.json$/, ".flac");
+		const fiche = {
+			format: "fauststore-material",
+			version: 1,
+			kind: "recording",
+			name: recording.name,
+			...recording.description,
+			media: {
+				path: media.slice(dir.length),
+				type: "audio/flac",
+				sha1: await bytesSha1(recording.flac),
+				size: recording.flac.length
+			},
+			recordingOf: path,
+			from: {
+				path,
+				sha1: await sha1(content)
+			}
+		};
+		const files = new Map([
+			[path, content],
+			...modules,
+			[media, recording.flac],
+			[description, JSON.stringify(fiche, null, 1) + "\n"]
+		]);
+		const what = `the scene ${name}, its recording ${recording.name}` + (modules.size ? ` and ${modules.size} module${modules.size > 1 ? "s" : ""} (${[...modules.keys()].map((p) => p.split("/")[1]).join(", ")})` : "");
+		const { commit, branch } = await this.publish(store, files, `${replaced ? "Publish again" : "Publish"} ${what} (faustmodular)`);
+		return {
+			store,
+			path,
+			commit,
+			branch,
+			replaced,
+			modules: [...modules.keys()],
+			material: description
+		};
+	}
 	async publishModule(store, name, code) {
 		const path = modulePath(name);
 		const replaced = await this.exists(store, path);
@@ -777,6 +929,10 @@ var Publishing = class {
 		};
 	}
 };
+async function bytesSha1(bytes) {
+	const digest = await globalThis.crypto.subtle.digest("SHA-1", bytes);
+	return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 // src/store/StoreLink.ts
 function storeLink(search, param = "scene") {
 	const params = new URLSearchParams(search);
@@ -893,5 +1049,5 @@ function planFiles(rows) {
 	return files;
 }
 // src/store/fauststore.ts
-var FAUSTSTORE_VERSION = "1.0.0";
-export { FAUSTSTORE_VERSION, GITHUB, PublishError, Publishing, STORES_KEY, STORE_INDEX, STORE_MANIFEST, StoreError, StorePublisher, StoreReader, StoreTokens, Stores, TOKENS_KEY, buildIndex, contentsOf, gitBlobSha, libraryShas, moduleEntry, modulePath, nameOfPath, normalizeText, parseFileUrl, parseIndex, parseManifest, parseStoreRef, planFiles, planSceneModules, safePath, sceneCodes, sceneNameIn, scenePath, serializeIndex, sha1, shareLink, slug, storeKey, storeLink, unwrapModuleCode, userCode, withoutStoreLink, wrapModuleCode };
+var FAUSTSTORE_VERSION = "1.1.0";
+export { FAUSTSTORE_VERSION, GITHUB, MAX_MEDIA, PublishError, Publishing, STORES_KEY, STORE_INDEX, STORE_MANIFEST, StoreError, StorePublisher, StoreReader, StoreTokens, Stores, TOKENS_KEY, buildIndex, contentsOf, gitBlobSha, libraryShas, materialPath, moduleEntry, modulePath, nameOfPath, normalizeText, parseFileUrl, parseIndex, parseManifest, parseMaterial, parseStoreRef, planFiles, planSceneModules, safePath, sceneCodes, sceneNameIn, scenePath, serializeIndex, sha1, shareLink, slug, storeKey, storeLink, unwrapModuleCode, userCode, withoutStoreLink, wrapModuleCode };
