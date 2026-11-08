@@ -145,6 +145,7 @@ function parseMaterial(json, path, blob) {
 			commit: sha(m.from.commit)
 		} : void 0,
 		generator: text(m.generator, 100),
+		faust: m.faust && typeof m.faust.libfaust == "string" ? { libfaust: text(m.faust.libfaust, 40) } : void 0,
 		timeline: m.timeline && [
 			m.timeline.tempo,
 			m.timeline.meter,
@@ -403,6 +404,18 @@ var StoreReader = class {
 		if (!response.ok) throw new StoreError("network", `${response.status} ${path}`);
 		return response.text();
 	}
+	async bytes(ref, path, token) {
+		let response;
+		try {
+			const encoded = path.split("/").map(encodeURIComponent).join("/");
+			response = token ? await this.api(this.apiUrl(ref, `contents/${encoded}`) + (ref.ref ? `?ref=${encodeURIComponent(ref.ref)}` : ""), token, "application/vnd.github.raw") : await this.fFetch(this.rawUrl(ref, path));
+		} catch (e) {
+			throw new StoreError("network", String(e));
+		}
+		if (response.status == 404) throw new StoreError("notFound", path);
+		if (!response.ok) throw new StoreError("network", `${response.status} ${path}`);
+		return new Uint8Array(await response.arrayBuffer());
+	}
 	async open(ref, token) {
 		let manifest = null;
 		try {
@@ -445,6 +458,17 @@ var StoreReader = class {
 		} catch {
 			return null;
 		}
+	}
+	async commitsOf(ref, path, token) {
+		let response;
+		try {
+			response = await this.api(this.apiUrl(ref, `commits?path=${encodeURIComponent(path)}&sha=${encodeURIComponent(ref.ref ?? "HEAD")}&per_page=100`), token);
+		} catch (e) {
+			throw new StoreError("network", String(e));
+		}
+		if (!response.ok) throw new StoreError(response.status == 404 ? "notFound" : "network", `${response.status} commits`);
+		const list = await response.json();
+		return Array.isArray(list) ? list.map((c) => c?.sha).filter((s) => typeof s == "string" && /^[0-9a-f]{40}$/.test(s)) : [];
 	}
 	async tree(ref, token) {
 		let response;
@@ -771,8 +795,8 @@ var StoreTokens = class StoreTokens {
 	}
 };
 var MAX_MEDIA = 52428800;
-function shareLink(app, ref, commit, path) {
-	return `${app}?scene=https://github.com/${ref.owner}/${ref.repo}/blob/${commit}/${path.split("/").map(encodeURIComponent).join("/")}`;
+function shareLink(app, ref, commit, path, param = "scene") {
+	return `${app}?${param}=https://github.com/${ref.owner}/${ref.repo}/blob/${commit}/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 var Publishing = class {
 	constructor(tokens, stores, publisher = new StorePublisher()) {
@@ -1048,6 +1072,82 @@ function planFiles(rows) {
 	else if (r.choice == "other" && r.other) files.set(r.other, r.code);
 	return files;
 }
+// src/store/Recall.ts
+function descriptionPath(path) {
+	return /\.json$/i.test(path) ? path : path.replace(/\.[^./]+$/, ".json");
+}
+async function recallScene(reader, ref, path, token, versions = 20) {
+	const description = descriptionPath(path);
+	let material;
+	try {
+		material = parseMaterial(JSON.parse(await reader.text(ref, description, token)), description);
+	} catch (e) {
+		if (e instanceof StoreError) throw e;
+		throw new StoreError("notAStore", description);
+	}
+	const scene = material?.recordingOf ?? material?.from?.path;
+	if (!material || !scene) throw new StoreError("notAStore", description);
+	const want = material.from?.sha1;
+	const at = (commit) => commit ? {
+		...ref,
+		ref: commit
+	} : ref;
+	const read = async (commit) => {
+		try {
+			return await reader.text(at(commit), scene, token);
+		} catch {
+			return null;
+		}
+	};
+	const head = await read(null);
+	if (head !== null && want && await sha1(head) == want) return {
+		material,
+		scene,
+		content: head,
+		commit: null,
+		exact: true,
+		how: "head"
+	};
+	if (want) {
+		try {
+			const commits = await reader.commitsOf(ref, description, token);
+			const commit = commits[commits.length - 1];
+			if (commit) {
+				const content = await read(commit);
+				if (content !== null && await sha1(content) == want) return {
+					material,
+					scene,
+					content,
+					commit,
+					exact: true,
+					how: "recording"
+				};
+			}
+		} catch {}
+		try {
+			for (const commit of (await reader.commitsOf(ref, scene, token)).slice(0, versions)) {
+				const content = await read(commit);
+				if (content !== null && await sha1(content) == want) return {
+					material,
+					scene,
+					content,
+					commit,
+					exact: true,
+					how: "history"
+				};
+			}
+		} catch {}
+	}
+	if (head === null) throw new StoreError("notFound", scene);
+	return {
+		material,
+		scene,
+		content: head,
+		commit: null,
+		exact: false,
+		how: "current"
+	};
+}
 // src/store/fauststore.ts
-var FAUSTSTORE_VERSION = "1.1.0";
-export { FAUSTSTORE_VERSION, GITHUB, MAX_MEDIA, PublishError, Publishing, STORES_KEY, STORE_INDEX, STORE_MANIFEST, StoreError, StorePublisher, StoreReader, StoreTokens, Stores, TOKENS_KEY, buildIndex, contentsOf, gitBlobSha, libraryShas, materialPath, moduleEntry, modulePath, nameOfPath, normalizeText, parseFileUrl, parseIndex, parseManifest, parseMaterial, parseStoreRef, planFiles, planSceneModules, safePath, sceneCodes, sceneNameIn, scenePath, serializeIndex, sha1, shareLink, slug, storeKey, storeLink, unwrapModuleCode, userCode, withoutStoreLink, wrapModuleCode };
+var FAUSTSTORE_VERSION = "1.2.0";
+export { FAUSTSTORE_VERSION, GITHUB, MAX_MEDIA, PublishError, Publishing, STORES_KEY, STORE_INDEX, STORE_MANIFEST, StoreError, StorePublisher, StoreReader, StoreTokens, Stores, TOKENS_KEY, buildIndex, contentsOf, descriptionPath, gitBlobSha, libraryShas, materialPath, moduleEntry, modulePath, nameOfPath, normalizeText, parseFileUrl, parseIndex, parseManifest, parseMaterial, parseStoreRef, planFiles, planSceneModules, recallScene, safePath, sceneCodes, sceneNameIn, scenePath, serializeIndex, sha1, shareLink, slug, storeKey, storeLink, unwrapModuleCode, userCode, withoutStoreLink, wrapModuleCode };
