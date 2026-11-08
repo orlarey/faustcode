@@ -76,6 +76,22 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
   const { registerProcessor, AudioWorkletProcessor, sampleRate } = globalThis;
   const audioClock = globalThis;
   const kBlockSize = 128;
+  const statusChannel = (status) => status >= 128 && status < 240 ? status & 15 : -1;
+  const messageChannel = (msg) => {
+    switch (msg.type) {
+      case "midi":
+        return statusChannel(msg.data[0]);
+      case "wam-midi":
+        return statusChannel(msg.data.bytes[0]);
+      case "ctrlChange":
+      case "pitchWheel":
+      case "keyOn":
+      case "keyOff":
+        return msg.data[0];
+      default:
+        return -1;
+    }
+  };
   const kFromAutomation = -2;
   const kFromSensors = -1;
   const kCancelled = () => {
@@ -230,6 +246,7 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
       const event = {
         frame,
         seq: this.fEventSeq++,
+        channel: messageChannel(msg),
         apply: () => {
           try {
             apply();
@@ -264,11 +281,39 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
       }
     }
     /**
+     * Cancel the MIDI messages of one channel scheduled and not yet
+     * performed: what CC 120/123 on that channel asks for.
+     *
+     * All Notes Off and All Sound Off are channel mode messages, and the
+     * polyphonic DSP only ends the voices of their channel: the notes
+     * waiting on other channels, and the control messages, are left alone.
+     *
+     * @param channel - the MIDI channel, 0..15
+     */
+    flushChannelEvents(channel) {
+      const queue = this.fEventQueue;
+      let kept = 0;
+      for (let i = 0; i < queue.length; i++) {
+        if (queue[i].channel !== channel) queue[kept++] = queue[i];
+      }
+      queue.length = kept;
+      for (const event of this.fBlockEvents) {
+        if (event.seq >= 0 && event.channel === channel)
+          event.apply = kCancelled;
+      }
+    }
+    /** Whether the DSP receives raw MIDI on `channel`, 0..15. */
+    acceptsMidiChannel(channel) {
+      const received = this.fDSPCode.getMidiChannel();
+      return received === 0 || channel === received - 1;
+    }
+    /**
      * Whether a controller number silences the instrument.
      *
      * Exactly the two `FaustPolyWebAudioDsp.ctrlChange` treats as
-     * all-notes-off. Not 121, which resets controllers without ending a
-     * note, and not 122, which is a keyboard's local control.
+     * all-notes-off for their channel. Not 121, which resets controllers
+     * without ending a note, and not 122, which is a keyboard's local
+     * control.
      */
     isPanic(ctrl) {
       return ctrl === 120 || ctrl === 123;
@@ -379,8 +424,9 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
         // Generic MIDI message
         case "midi": {
           this.atTime(msg, () => {
-            if (msg.data[0] >> 4 === 11 && this.isPanic(msg.data[1]))
-              this.flushEvents();
+            const channel = msg.data[0] & 15;
+            if (msg.data[0] >> 4 === 11 && this.isPanic(msg.data[1]) && this.acceptsMidiChannel(channel))
+              this.flushChannelEvents(channel);
             this.midiMessage(msg.data);
           });
           break;
@@ -388,9 +434,16 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
         // Typed MIDI message
         case "ctrlChange": {
           this.atTime(msg, () => {
-            if (this.isPanic(msg.data[1])) this.flushEvents();
+            if (this.isPanic(msg.data[1]))
+              this.flushChannelEvents(msg.data[0]);
             this.ctrlChange(msg.data[0], msg.data[1], msg.data[2]);
           });
+          break;
+        }
+        // Received MIDI channel, applied on arrival like the other
+        // settings of the DSP
+        case "midiChannel": {
+          this.fDSPCode.setMidiChannel(msg.data);
           break;
         }
         case "pitchWheel": {
@@ -545,10 +598,16 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
   class FaustPolyAudioWorkletProcessor extends FaustAudioWorkletProcessor {
     constructor(options) {
       super(options);
-      // The base switch already routes 'keyOn' and 'keyOff' through
-      // `this.keyOn` / `this.keyOff`, overridden below. This exists only to
-      // bind `this` for the port listener.
+      // Raw MIDI goes to `FaustPolyWebAudioDsp.midiMessage`, which applies
+      // the received channel before decoding notes. The base switch already
+      // routes 'keyOn' and 'keyOff' through `this.keyOn` / `this.keyOff`,
+      // overridden below.
       this.handleMessageAux = (e) => {
+        if (e.data.type === "allNotesOff") {
+          this.flushEvents();
+          this.allNotesOff(e.data.data);
+          return;
+        }
         super.handleMessageAux(e);
       };
       const { FaustPolyWebAudioDsp: FaustPolyWebAudioDsp3 } = dependencies;
@@ -584,17 +643,10 @@ var getFaustAudioWorkletProcessor = (dependencies, faustData, register = true) =
       this.fDSPCode.setInputParamHandler(
         (path, value) => this.port.postMessage({ path, value, type: "in-param" })
       );
+      this.fDSPCode.setActiveVoicesHandler(
+        (count) => this.port.postMessage({ value: count, type: "active-voices" })
+      );
       this.fDSPCode.start();
-    }
-    midiMessage(data) {
-      const cmd = data[0] >> 4;
-      const channel = data[0] & 15;
-      const data1 = data[1];
-      const data2 = data[2];
-      if (cmd === 8 || cmd === 9 && data2 === 0)
-        this.keyOff(channel, data1, data2);
-      else if (cmd === 9) this.keyOn(channel, data1, data2);
-      else super.midiMessage(data);
     }
     // Public API
     keyOn(channel, pitch, velocity) {
@@ -2880,6 +2932,8 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
     this.fMidiKeyLabel = new Array(128).fill(null).map(() => []);
     this.fMidiKeyOnLabel = new Array(128).fill(null).map(() => []);
     this.fMidiKeyOffLabel = new Array(128).fill(null).map(() => []);
+    // Received MIDI channel in 1..16, 0 for all channels (see setMidiChannel)
+    this.fMidiChannel = 0;
     this.fPathTable = {};
     /** Paths already complained about, so the warning is not repeated. */
     this.fUnknownPaths = /* @__PURE__ */ new Set();
@@ -3435,7 +3489,62 @@ var FaustBaseWebAudioDsp = class _FaustBaseWebAudioDsp {
   getNumOutputs() {
     return -1;
   }
+  /**
+   * Read the received MIDI channel from the DSP metadata:
+   * `declare options "[midichannel:N]";` or `declare midichannel "N";`.
+   *
+   * Same rules as `MidiMeta::getChannel` in the C++ architecture files: an
+   * invalid value is reported and means all channels.
+   *
+   * @param meta - the `meta` array of the DSP JSON
+   * @returns the channel in 1..16, or 0 for all channels
+   */
+  static parseMidiChannel(meta) {
+    if (!meta) return 0;
+    let value;
+    let source = "";
+    for (const item of meta) {
+      if (typeof item.options === "string") {
+        const match = item.options.match(/\[midichannel:([^\]]*)\]/);
+        if (match) {
+          value = match[1];
+          source = "[midichannel] option";
+        }
+      }
+    }
+    if (value === void 0) {
+      for (const item of meta) {
+        if (typeof item.midichannel === "string") {
+          value = item.midichannel;
+          source = "midichannel metadata";
+        }
+      }
+    }
+    if (value === void 0 || value.trim() === "") return 0;
+    const channel = /^\s*\d+\s*$/.test(value) ? Number(value) : NaN;
+    if (!(channel >= 0 && channel <= 16)) {
+      console.warn(
+        `Faust: invalid MIDI channel '${value}' in ${source}: should be in 1..16, or 0 for all channels`
+      );
+      return 0;
+    }
+    return channel;
+  }
+  setMidiChannel(channel) {
+    this.fMidiChannel = Number.isInteger(channel) && channel >= 0 && channel <= 16 ? channel : 0;
+  }
+  getMidiChannel() {
+    return this.fMidiChannel;
+  }
+  /**
+   * Whether `midiMessage` receives the channel voice message whose status
+   * byte is `status`. Real-time and SysEx messages (0xF0..0xFF) always are.
+   */
+  acceptMidiStatus(status) {
+    return this.fMidiChannel === 0 || status >= 240 || (status & 15) === this.fMidiChannel - 1;
+  }
   midiMessage(data) {
+    if (!this.acceptMidiStatus(data[0])) return;
     if (this.fPlotHandler) this.fCachedEvents.push({ data, type: "midi" });
     const cmd = data[0] >> 4;
     const channel = data[0] & 15;
@@ -3642,6 +3751,9 @@ var FaustMonoWebAudioDsp = class extends FaustBaseWebAudioDsp {
     this.fInstance = instance;
     this.fSampleRate = sampleRate;
     this.fJSONDsp = JSON.parse(this.fInstance.json);
+    this.fMidiChannel = FaustBaseWebAudioDsp.parseMidiChannel(
+      this.fJSONDsp.meta
+    );
     FaustBaseWebAudioDsp.parseUI(this.fJSONDsp.ui, this.fUICallback);
     this.fEndMemory = this.initMemory();
     this.fInstance.api.init(this.fDSP, sampleRate);
@@ -3831,6 +3943,8 @@ var FaustWebAudioDspVoice = class _FaustWebAudioDspVoice {
     this.fCurNote = _FaustWebAudioDspVoice.kFreeVoice;
     this.fNextNote = -1;
     this.fNextVel = -1;
+    // MIDI channel (0..15) of the current note, of the next one in kLegatoVoice state
+    this.fChannel = 0;
     this.fDate = 0;
     this.fLevel = 0;
     this.fDSP = $dsp;
@@ -3961,6 +4075,9 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
     this.fMixingBase = [];
     /** Voices whose crossfade this block already rendered in full. */
     this.fStolen = [];
+    /** The count last given to `fActiveVoicesHandler`. */
+    this.fActiveVoices = 0;
+    this.fActiveVoicesHandler = null;
     /**
      * Render one slice: every live voice into the sum, then the effect.
      *
@@ -4014,6 +4131,9 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
     this.fInstance = instance;
     this.fSampleRate = sampleRate;
     this.fJSONDsp = JSON.parse(this.fInstance.voiceJSON);
+    this.fMidiChannel = FaustBaseWebAudioDsp.parseMidiChannel(
+      this.fJSONDsp.meta
+    );
     this.fJSONEffect = this.fInstance.effectAPI && this.fInstance.effectJSON ? JSON.parse(this.fInstance.effectJSON) : null;
     FaustBaseWebAudioDsp.parseUI(this.fJSONDsp.ui, this.fUICallback);
     if (this.fJSONEffect)
@@ -4228,10 +4348,13 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
     this.fVoiceTable[voice].fCurNote = type;
     return voice;
   }
-  getPlayingVoice(pitch) {
+  // The same pitch may be played on several channels at once: a note off
+  // releases the voice of its own channel
+  getPlayingVoice(channel, pitch) {
     let voicePlaying = FaustWebAudioDspVoice.kNoVoice;
     let oldestDatePlaying = Number.MAX_VALUE;
     for (let i = 0; i < this.fInstance.voices; i++) {
+      if (this.fVoiceTable[i].fChannel !== channel) continue;
       const curNote = this.fVoiceTable[i].fCurNote;
       const nextNote = this.fVoiceTable[i].fNextNote;
       if (curNote === pitch || curNote === FaustWebAudioDspVoice.kLegatoVoice && nextNote === pitch) {
@@ -4328,6 +4451,13 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
         voice.fCurNote = FaustWebAudioDspVoice.kFreeVoice;
       }
     });
+    if (this.fActiveVoicesHandler) {
+      const active = this.getNumActiveVoices();
+      if (active !== this.fActiveVoices) {
+        this.fActiveVoices = active;
+        this.fActiveVoicesHandler(active);
+      }
+    }
     this.updateOutputs();
     this.clearNonFinite();
     if (output !== void 0) {
@@ -4426,6 +4556,7 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
     return this.fDescriptor;
   }
   midiMessage(data) {
+    if (!this.acceptMidiStatus(data[0])) return;
     const cmd = data[0] >> 4;
     const channel = data[0] & 15;
     const data1 = data[1];
@@ -4435,11 +4566,29 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
     else if (cmd === 9) return this.keyOn(channel, data1, data2);
     else super.midiMessage(data);
   }
+  // Channel mode messages only end the voices started on their channel, as
+  // in the C++ poly-dsp.h: All Notes Off releases them, All Sound Off mutes
+  // them at once
   ctrlChange(channel, ctrl, value) {
-    if (ctrl === 123 || ctrl === 120) {
-      this.allNotesOff(true);
+    if (ctrl === 123) {
+      this.channelNotesOff(channel, false);
+    } else if (ctrl === 120) {
+      this.channelNotesOff(channel, true);
     } else {
       super.ctrlChange(channel, ctrl, value);
+    }
+  }
+  // An indexed loop: reachable from the audio thread, it must not allocate
+  channelNotesOff(channel, hard) {
+    if (this.fPlotHandler)
+      this.fCachedEvents.push({
+        type: "ctrlChange",
+        data: [channel, hard ? 120 : 123, 0]
+      });
+    for (let i = 0; i < this.fVoiceTable.length; i++) {
+      const voice = this.fVoiceTable[i];
+      if (voice.fChannel === channel && voice.fCurNote !== FaustWebAudioDspVoice.kFreeVoice)
+        voice.keyOff(hard);
     }
   }
   keyOn(channel, pitch, velocity) {
@@ -4449,6 +4598,7 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
         data: [channel, pitch, velocity]
       });
     const voice = this.getFreeVoice();
+    this.fVoiceTable[voice].fChannel = channel;
     this.fVoiceTable[voice].keyOn(
       pitch,
       velocity,
@@ -4461,7 +4611,7 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
         type: "keyOff",
         data: [channel, pitch, velocity]
       });
-    const voice = this.getPlayingVoice(pitch);
+    const voice = this.getPlayingVoice(channel, pitch);
     if (voice !== FaustWebAudioDspVoice.kNoVoice) {
       this.fVoiceTable[voice].keyOff();
     } else {
@@ -4471,6 +4621,29 @@ var FaustPolyWebAudioDsp = class _FaustPolyWebAudioDsp extends FaustBaseWebAudio
   allNotesOff(hard = true) {
     this.fCachedEvents.push({ type: "ctrlChange", data: [0, 123, 0] });
     this.fVoiceTable.forEach((voice) => voice.keyOff(hard));
+  }
+  // Same count as dsp_voice_group::getNumActiveVoices() in the C++ poly-dsp.h.
+  // An indexed loop: called after every block when a handler is set, it must
+  // not allocate an iterator.
+  getNumActiveVoices() {
+    let count = 0;
+    for (let i = 0; i < this.fVoiceTable.length; i++) {
+      if (this.fVoiceTable[i].fCurNote !== FaustWebAudioDspVoice.kFreeVoice)
+        count++;
+    }
+    return count;
+  }
+  /**
+   * Call `handler` with the number of sounding voices after each block in
+   * which it changed (see `getNumActiveVoices`). The AudioWorklet processor
+   * uses it to keep its node's count up to date.
+   */
+  setActiveVoicesHandler(handler) {
+    this.fActiveVoicesHandler = handler;
+    this.fActiveVoices = this.getNumActiveVoices();
+  }
+  getActiveVoicesHandler() {
+    return this.fActiveVoicesHandler;
   }
 };
 
@@ -4567,6 +4740,12 @@ var FaustOfflineProcessor = class {
   }
   midiMessage(data) {
     this.fDSPCode.midiMessage(data);
+  }
+  setMidiChannel(channel) {
+    this.fDSPCode.setMidiChannel(channel);
+  }
+  getMidiChannel() {
+    return this.fDSPCode.getMidiChannel();
   }
   ctrlChange(chan, ctrl, value) {
     this.fDSPCode.ctrlChange(chan, ctrl, value);
@@ -4697,6 +4876,10 @@ var FaustPolyOfflineProcessor = class extends FaustOfflineProcessor {
   }
   allNotesOff(hard) {
     this.fDSPCode.allNotesOff(hard);
+  }
+  // The DSP renders on this thread: the count is always current
+  getNumActiveVoices() {
+    return this.fDSPCode.getNumActiveVoices();
   }
 };
 var FaustOfflineProcessor_default = FaustOfflineProcessor;
@@ -5476,6 +5659,8 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
       processorOptions: options.processorOptions,
       ...options
     });
+    /** Received MIDI channel, as last sent to the processor. */
+    this.fMidiChannel = 0;
     __privateAdd(this, _hasAccInput, false);
     __privateAdd(this, _hasGyrInput, false);
     this.handleMessageAux = (e) => {
@@ -5507,6 +5692,9 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
     };
     this.fJSONDsp = JSONObj;
     this.fJSON = factory.json;
+    this.fMidiChannel = FaustBaseWebAudioDsp.parseMidiChannel(
+      this.fJSONDsp.meta
+    );
     this.fOutputHandler = null;
     this.fInputHandler = null;
     this.fComputeHandler = null;
@@ -5662,17 +5850,14 @@ var FaustAudioWorkletNode = class extends (globalThis.AudioWorkletNode || null) 
    * writes an `AudioParam`, and `setValueAtTime` throws on a negative time.
    */
   midiMessage(data, time) {
-    const cmd = data[0] >> 4;
-    const channel = data[0] & 15;
-    const data1 = data[1];
-    const data2 = data[2];
-    if (cmd === 11) this.ctrlChange(channel, data1, data2, time);
-    else if (cmd === 14)
-      this.pitchWheel(channel, data2 * 128 + data1, time);
-    if (cmd === 8 || cmd === 9 && data2 === 0)
-      this.keyOff(channel, data1, data2, time);
-    else if (cmd === 9) this.keyOn(channel, data1, data2, time);
-    else this.port.postMessage({ type: "midi", data, time });
+    this.port.postMessage({ type: "midi", data, time });
+  }
+  setMidiChannel(channel) {
+    this.fMidiChannel = Number.isInteger(channel) && channel >= 0 && channel <= 16 ? channel : 0;
+    this.port.postMessage({ type: "midiChannel", data: this.fMidiChannel });
+  }
+  getMidiChannel() {
+    return this.fMidiChannel;
   }
   ctrlChange(channel, ctrl, value, time) {
     const e = { type: "ctrlChange", data: [channel, ctrl, value], time };
@@ -5797,20 +5982,32 @@ var FaustPolyAudioWorkletNode = class extends FaustAudioWorkletNode {
       options.processorOptions.voiceFactory,
       options
     );
+    /** The number of sounding voices, as last reported by the processor. */
+    this.fNumActiveVoices = 0;
     this.onprocessorerror = (e) => {
       throw e;
+    };
+    this.handleActiveVoices = (e) => {
+      if (e.data.type === "active-voices")
+        this.fNumActiveVoices = e.data.value;
     };
     this.fJSONEffect = options.processorOptions.effectFactory ? JSON.parse(options.processorOptions.effectFactory.json) : null;
     if (this.fJSONEffect) {
       FaustBaseWebAudioDsp.parseUI(this.fJSONEffect.ui, this.fUICallback);
     }
+    this.port.addEventListener("message", this.handleActiveVoices);
   }
   // Public API
   // `keyOn` and `keyOff` are inherited: the base posts the same message,
   // which the processor routes to the polyphonic DSP.
   allNotesOff(hard) {
-    const e = { type: "ctrlChange", data: [0, 123, 0] };
+    const e = { type: "allNotesOff", data: hard };
     this.port.postMessage(e);
+  }
+  // The DSP runs on the audio thread, which reports the count when it
+  // changes: this is its value at the end of the latest such block
+  getNumActiveVoices() {
+    return this.fNumActiveVoices;
   }
   getMeta() {
     const o = this.fJSONDsp;
@@ -5991,6 +6188,12 @@ var FaustScriptProcessorNode = class extends (globalThis.ScriptProcessorNode || 
   midiMessage(data) {
     this.fDSPCode.midiMessage(data);
   }
+  setMidiChannel(channel) {
+    this.fDSPCode.setMidiChannel(channel);
+  }
+  getMidiChannel() {
+    return this.fDSPCode.getMidiChannel();
+  }
   ctrlChange(chan, ctrl, value) {
     this.fDSPCode.ctrlChange(chan, ctrl, value);
   }
@@ -6057,6 +6260,10 @@ var FaustPolyScriptProcessorNode = class extends FaustScriptProcessorNode {
   }
   allNotesOff(hard) {
     this.fDSPCode.allNotesOff(hard);
+  }
+  // The DSP runs on this thread: the count is always current
+  getNumActiveVoices() {
+    return this.fDSPCode.getNumActiveVoices();
   }
 };
 

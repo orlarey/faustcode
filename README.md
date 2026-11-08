@@ -257,11 +257,11 @@ in `webapp/vendor/codemirror/`.
 ### Faust compiler and libraries
 
 faustcode and faustmodular embed the **same** libfaust and Faust libraries (`stdfaust.lib`...): a module
-edited here must compile and sound the same there. Both use `@grame/faustwasm` 0.19.6 (libfaust 2.90.19),
+edited here must compile and sound the same there. Both use `@grame/faustwasm` 0.20.1 (libfaust 2.90.19),
 copied here from the npm package:
 
 ```sh
-npm pack @grame/faustwasm@0.19.6 && tar xzf grame-faustwasm-0.19.6.tgz
+npm pack @grame/faustwasm@0.20.1 && tar xzf grame-faustwasm-0.20.1.tgz
 cp package/dist/esm/index.js webapp/faustwasm/index.js
 cp package/dist/esm/index.js webapp/vendor/faustwasm/index.js
 cp package/libfaust-wasm/libfaust-wasm.{js,data,wasm} webapp/libfaust-wasm/
