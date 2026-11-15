@@ -13,7 +13,7 @@ language: fr
 - **Ce qui existe** — sept gestes de sortie, dispersés.
 - **La thèse** — *File* pour écrire, *Share* pour tout ce qui sort, rangé par destinataire.
 - **Le panneau Share** — ses quatre onglets et ce qui leur est commun.
-- **Le mode player** — le public joue, puis installe, depuis un QR code.
+- **Le QR code mène à l'application** — la page player, ou l'application publiée.
 - Maquette : <https://claude.ai/artifact/XTBqf8RjLSNdymheM6ukaY> (privée).
 - **Ce qui disparaît, ce qui reste** — et les trois décisions ouvertes.
 - **Implémentation suggérée**, **Hors périmètre**, **Critères d'acceptation**.
@@ -67,8 +67,8 @@ Rec reste dans la vue Run : enregistrer est un geste de jeu, pas une sortie du m
 
 Le contenu actuel du dialogue Share, avec un choix de plus.
 
-- **Jouer** ou **éditer** : *jouer* ouvre le mode player (`view=play`, ci-dessous) ; *éditer* ouvre faustcode sur la vue dsp (`view=dsp`). Défaut : jouer.
-- **Avec le code** ou **lien du store**, comme aujourd'hui ; le lien du store n'est proposé que pour un fichier publié et inchangé depuis.
+- **Jouer** ou **éditer** : *jouer* mène à l'application (ci-dessous) ; *éditer* ouvre faustcode sur la vue dsp (`view=dsp`). Défaut : jouer.
+- La source du lien : **avec le code** (toujours possible), **du store** (fichier publié et inchangé depuis), **application publiée** (publiée comme application, inchangée depuis, et servie). La meilleure disponible est choisie par défaut : application publiée, puis store, puis code.
 - QR code, **Projection** (plein écran, nom du module), **Copy link**.
 - Quand le lien dépasse la capacité d'un QR code (environ 2 950 octets en niveau L) ou sa lisibilité de loin (1 000 caractères), le message existant renvoie désormais vers l'onglet **Publish** : un module publié a un lien court.
 
@@ -88,27 +88,49 @@ Le contenu actuel du dialogue Share, avec un choix de plus.
 
 ## Publish
 
-L'entrée *File ▸ Publish to …* déplacée ici, inchangée (`stores-ui.publishFile`) : un store en écriture, ou plusieurs au choix ; sans store en écriture, un lien vers *File ▸ Stores…* pour en suivre un et donner son jeton. Après publication, le lien court copié et l'onglet Audience proposé, son QR code prêt.
+Deux publications, dans le même store :
 
-# Le mode player
+- **Le module** : l'entrée *File ▸ Publish to …* déplacée ici, inchangée (`stores-ui.publishFile`) ;
+- **As an app** : la PWA compilée, à côté du module (voir *L'application publiée*).
 
-## Ce qu'il est
+Pour l'une comme pour l'autre : un store en écriture, ou plusieurs au choix ; sans store en écriture, un lien vers *File ▸ Stores…* pour en suivre un et donner son jeton. Après publication, le lien court copié et l'onglet Audience proposé, son QR code prêt.
 
-Le lien *jouer* (`?code=…&view=play&poly=n`, ou `?file=…&view=play`) ne montre pas l'IDE : faustcode compile le module, l'installe comme application de son origine (`installPwaApp`, à `apps/<nom>/`) puis **remplace la page par celle de l'application** (`location.replace`). Le public arrive donc directement sur l'application elle-même : l'interface du module, le son qui démarre au premier geste (toucher n'importe où), capteurs et MIDI (ceux de `faust-pwa.js`), et le bouton **Installer** (Chrome et Edge sur Android) ou l'indication *Partager ▸ Sur l'écran d'accueil* (Safari sur iOS).
+# Le QR code mène à l'application
+
+Le public ne doit jamais voir l'IDE : il flashe le QR code et arrive sur **l'application elle-même**, prête à jouer et à installer — l'interface du module, le son qui démarre au premier geste (toucher n'importe où), capteurs et MIDI (ceux de `faust-pwa.js`), le bouton **Installer** (Chrome et Edge sur Android) ou l'indication *Partager ▸ Sur l'écran d'accueil* (Safari sur iOS).
+
+Une application doit être *compilée* et *servie* quelque part. D'où deux liens, selon qu'elle est déjà hébergée ou non.
+
+| | Lien avec le code | Application publiée |
+| :-- | :-- | :-- |
+| le QR mène à | `play.html`, qui fabrique l'application sur le téléphone | l'application, déjà compilée et hébergée |
+| premier scan | environ 7 Mo (libfaust) et quelques secondes de compilation | immédiat, comme un site |
+| scans suivants | immédiat (application déjà dans le téléphone) | immédiat |
+| longueur du lien | celle du code compressé (le QR peut saturer) | courte |
+| prérequis | aucun | un store en écriture, servi par GitHub Pages |
+
+## Le lien avec le code : la page player
+
+- Adresse : `https://orlarey.github.io/faustcode/play.html?code=…&name=…&poly=n` (ou `?file=…` pour un module de store). C'est une **page distincte** de l'IDE : elle ne charge ni l'éditeur ni les vues, seulement faustwasm, libfaust-wasm et `pwa-export.js`.
+- Elle affiche le nom du module et sa préparation (*« Preparing organ… »*, trois étapes), compile, installe l'application dans le stockage du téléphone (`installPwaApp`, à `apps/<nom>/`) puis **remplace la page par celle de l'application** (`location.replace`).
+- Si le téléphone a déjà cette version exacte de l'application (même empreinte du code et des voix, notée dans son `manifest.json`), elle y va **tout de suite**, sans charger libfaust.
+- En bas, discret : *« Open the code in faustcode »* pour qui veut voir le code.
+- Sans service worker (navigation privée de certains navigateurs), elle se replie sur la vue Run de faustcode et son bouton *Tap to play*.
 
 ::: note [Pourquoi l'application elle-même]
-Le player et l'application installée sont alors une seule et même page : rien à maintenir en double, et ce que le public installe est exactement ce qu'il vient de jouer. Sur iOS, *Sur l'écran d'accueil* installe la page affichée : il faut donc que ce soit `apps/<nom>/`, pas une adresse de faustcode chargée de paramètres.
+Le player et l'application installée sont une seule et même page : rien à maintenir en double, et ce que le public installe est exactement ce qu'il vient de jouer. Sur iOS, *Sur l'écran d'accueil* installe la page affichée : il faut donc que ce soit `apps/<nom>/`, pas une adresse chargée de paramètres.
 :::
 
-## Ce qu'il coûte
+## L'application publiée : le lien direct
 
-- Le téléphone charge faustcode et libfaust-wasm (environ 7 Mo, une fois, puis en cache HTTP), comme le lien actuel, puis compile : quelques secondes. Un écran *« Préparation de <nom>… »* les occupe.
-- L'application vit dans le stockage du site `orlarey.github.io` *du téléphone* ; effacer les données de ce site la retire.
-- Sans service worker (navigation privée de certains navigateurs), le player se replie sur la vue Run actuelle et son bouton *Tap to play*.
+- *Share ▸ Publish ▸ As an app* compile le module aux voix choisies et écrit la PWA (les fichiers de `pwaEntries`, son service worker compris) dans le store, à `apps/<nom>/`, en un commit, à côté du module.
+- GitHub Pages sert alors l'application à `https://<owner>.github.io/<repo>/apps/<nom>/`, environ une minute après le commit. L'onglet Audience propose ce lien dès qu'il répond : court, immédiat, durable, indépendant de faustcode.
+- Republier met l'application à jour ; le service worker de la PWA (nom de cache daté) remplace l'ancienne version chez ceux qui l'ont installée.
 
-## Ce qu'il ne change pas
+## Ce qu'il coûte, ce qu'il ne change pas
 
-Les liens `view=run` existants (slides, QR déjà imprimés) gardent leur comportement.
+- Une application fabriquée par `play.html` vit dans le stockage du site `orlarey.github.io` *du téléphone* ; effacer les données de ce site la retire. Une application publiée n'a pas cette fragilité.
+- Les liens `?code=…&view=run` existants (slides, QR déjà imprimés) ouvrent toujours la vue Run de faustcode.
 
 # Ce qui disparaît, ce qui reste
 
@@ -118,6 +140,7 @@ Les liens `view=run` existants (slides, QR déjà imprimés) gardent leur compor
 | File ▸ Math documentation | Share ▸ Files |
 | Download des vues dsp, svg, run | Share ▸ Files *(décision 2)* |
 | bouton *pwa* de la vue Run | Share ▸ Apps |
+| QR code vers l'IDE (vue Run) | QR code vers l'application |
 | bouton *faustmodular* | Share ▸ Apps, et raccourci conservé *(décision 1)* |
 | Rec | reste dans la vue Run |
 | File | nouveau, ouvrir, sauvegarder, versions, stores (lecture) |
@@ -125,21 +148,21 @@ Les liens `view=run` existants (slides, QR déjà imprimés) gardent leur compor
 ::: important [Décisions ouvertes]
 1. **Bouton faustmodular** — *proposition : le garder en raccourci.* Ce n'est pas un export ponctuel mais un lien vivant (chaque sauvegarde met le module à jour), utilisé à chaque séance avec faustmodular.
 2. **Download des vues** — *proposition : les retirer.* Un seul endroit pour les fichiers ; la vue svg pourrait garder un clic droit *Enregistrer le diagramme* sur le diagramme affiché.
-3. **Le player** — *proposition : l'application elle-même* (ci-dessus), plutôt qu'une vue Run allégée sur mobile.
+3. **L'hébergement des applications publiées** — *proposition : le dépôt du store lui-même*, à `apps/<nom>/`, avec GitHub Pages activé une fois pour toutes dans ses réglages (le jeton actuel, *Contents* en lecture et écriture, suffit pour les commits ; activer Pages demande les réglages du dépôt). L'autre voie, un dépôt dédié aux applications, sépare les sources des fichiers compilés mais demande un second jeton.
 :::
 
 # Implémentation suggérée
 
 - `share-ui.js` : le dialogue devient un panneau à onglets ; `buildQr`, la projection et la copie inchangés ; le sélecteur de voix et le bandeau de brouillon en tête.
-- `share-link.js` : `play` ajouté à `SHARE_VIEWS` ; `encodeShareParams` inchangé par ailleurs.
-- `boot.js` : `view=play` — après l'ouverture du lien (code ou store), `installPwaApp` puis `location.replace(url)` ; repli sur `view=run` en cas d'échec.
+- `play.html`, `play.js` : la page player ; `share-link.js` lui fournit le décodage des liens (`decodeShareParams`) et la construction de son adresse (`buildPlayUrl`).
+- `pwa-export.js` : l'empreinte du code et des voix dans le manifeste de l'application, pour reconnaître une application déjà installée.
+- `stores-ui.js` : *Publish ▸ As an app* — les fichiers de `pwaEntries` dans le même commit que le module ; la disponibilité du lien (une requête `HEAD` sur l'adresse Pages).
 - `pwa-export.js`, `mathdoc-export.js`, `stores-ui.js` : réutilisés tels quels depuis le panneau.
 - `app.js` : retrait des entrées du menu File, des Download et du bouton *pwa* ; le bouton *Share* ouvre le panneau sur le dernier onglet.
 - MCP : un outil `get_share_link` (lien, `play` ou `dsp`, voix) rendrait le partage scriptable ; à prévoir dans `tools.json` et `MCP-SPEC.md`.
 
 # Hors périmètre
 
-- Publier une PWA sur GitHub Pages (lien permanent d'application, indépendant de faustcode).
 - Faire communiquer plusieurs applications (bus de contrôle `BroadcastChannel`, audio entre applications).
 - La mise en page de l'IDE sur téléphone, au-delà du player.
 
@@ -148,7 +171,8 @@ Les liens `view=run` existants (slides, QR déjà imprimés) gardent leur compor
 1. Tout geste de sortie s'atteint par *Share* en deux clics au plus ; File ne contient plus d'action qui sorte de faustcode.
 2. Le sélecteur de voix du panneau fixe la polyphonie du lien, de l'application installée et de la PWA en `.zip`.
 3. Un brouillon non sauvegardé est signalé, et rien n'en est partagé.
-4. Un QR *jouer* projeté, flashé avec un téléphone Android (Chrome) et un iPhone (Safari), ouvre `apps/<nom>/` : le module se joue après un geste, l'application s'installe (bouton, ou *Sur l'écran d'accueil*), puis fonctionne hors ligne.
-5. Les liens `view=run` existants ouvrent toujours la vue Run.
-6. Un `.lib` et un code qui ne compile pas grisent ce qui ne s'applique pas, avec la raison.
-7. Les tests `node --test webapp/*.test.mjs` passent, dont ceux de `share-link` pour `view=play`.
+4. Un QR *jouer* projeté, flashé avec un téléphone Android (Chrome) et un iPhone (Safari), mène à l'application sans jamais montrer l'IDE : le module se joue après un geste, l'application s'installe (bouton, ou *Sur l'écran d'accueil*), puis fonctionne hors ligne ; un second scan du même module l'ouvre aussitôt.
+5. Un module publié comme application donne un QR qui ouvre l'application hébergée, sans charger faustcode.
+6. Les liens `view=run` existants ouvrent toujours la vue Run.
+7. Un `.lib` et un code qui ne compile pas grisent ce qui ne s'applique pas, avec la raison.
+8. Les tests `node --test webapp/*.test.mjs` passent, dont ceux de la page player (décodage, application déjà installée).
