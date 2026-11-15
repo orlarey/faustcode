@@ -103,8 +103,8 @@ don't have to fight Chrome's ES module cache while iterating.
   faustwasm 0.20.1 (`webapp/vendor/faust-pwa/`). Serve the folder by HTTP
   (`python3 -m http.server`) ; in HTTPS it installs and runs offline. The
   **svg** view downloads every diagram in `<name>-svg.zip`.
-- **Apps** (0.21.0) : Download ▸ app (install…) in the **run** view
-  installs the program at once as an app of faustcode's origin, at
+- **Apps** (0.21.0) : the **pwa** button of the **run** view (wide
+  screens) installs the program at once as an app of faustcode's origin, at
   `apps/<name>/` : its window opens with an Install button (Chrome, Edge ;
   Safari : File ▸ Add to Dock, Share ▸ Add to Home Screen). The files live
   in the cache `faustcode-apps`, served by `webapp/apps/sw.js` (scope

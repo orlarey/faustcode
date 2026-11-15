@@ -529,6 +529,7 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   }
 
   .run-header .download-select-group,
+  .run-header .run-pwa-btn,
   .run-header .run-header-pill:has(#midi-input) {
     display: none;
   }

@@ -940,6 +940,16 @@ async function renderCurrentView(targetContainer = viewContainer) {
           };
         }
       },
+      onInstallApp: async () => {
+        try {
+          await installRunApp();
+          hideError();
+        } catch (err) {
+          const message = `Error: ${err.message}`;
+          showError(message);
+          showErrorOverlay(message);
+        }
+      },
       onDownload: async (format) => {
         try {
           await downloadCurrentViewArtifact(format);
@@ -1559,6 +1569,45 @@ function hideInterface() {
 }
 
 /**
+ * The pwa button of the run view : the code it plays, at its voices, installed
+ * as an app (pwa-export.js, installPwaApp), its window opened.
+ */
+async function installRunApp() {
+  if (state.sessionIndex >= state.sessions.length || state.sessionIndex < 0) return;
+  const session = state.sessions[state.sessionIndex];
+  if (!session) return;
+  const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+  // the app is opened in a window made now, during the click : made after
+  // the compilation, the window would be blocked as a pop-up
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.title = `${base} : installing`;
+    win.document.body.style.cssText = 'background:#1f1f1f;color:#b0b0b0;font:15px system-ui,sans-serif;padding:24px';
+    win.document.body.textContent = `Compiling ${session.filename} and installing it as an app…`;
+  }
+  showLoading();
+  try {
+    const response = await fetch(`/api/${session.sha1}/user_code.dsp`);
+    if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
+    const code = await response.text();
+    const appVersion = headerAppVersion ? headerAppVersion.textContent.replace(/^v/, '') : '';
+    const result = await installPwaApp({ code, filename: session.filename, voices: state.runGlobal.polyVoices || 0, appVersion });
+    if (win && !win.closed) win.location.href = result.url;
+    const mode = result.voices > 0 ? `${result.voices} voices${result.hasEffect ? ' + effect' : ''}` : 'mono';
+    showNotice(
+      win ? `${result.name} (${mode}) is ready in its window : install it from there.`
+        : `${result.name} (${mode}) is ready at ${result.url} (the window was blocked) : open it to install it.`,
+      win ? 8000 : 30000,
+    );
+  } catch (err) {
+    if (win && !win.closed) win.close();
+    throw err;
+  } finally {
+    hideLoading();
+  }
+}
+
+/**
  * Purpose: Download the artifact corresponding to the currently selected view.
  * How: Resolves endpoint and filename from active session/view context and delegates network transfer to `downloadFromUrl`.
  */
@@ -1574,36 +1623,6 @@ async function downloadCurrentViewArtifact(format = '') {
   if (state.currentView === 'svg') {
     url = `/api/${session.sha1}/download/svg`;
     filename = `${base}-svg.zip`;
-  } else if (state.currentView === 'run' && format === 'app') {
-    // the app is opened in a window made now, during the click : made after
-    // the compilation, the window would be blocked as a pop-up
-    const win = window.open('', '_blank');
-    if (win) {
-      win.document.title = `${base} : installing`;
-      win.document.body.style.cssText = 'background:#1f1f1f;color:#b0b0b0;font:15px system-ui,sans-serif;padding:24px';
-      win.document.body.textContent = `Compiling ${session.filename} and installing it as an app…`;
-    }
-    showLoading();
-    try {
-      const response = await fetch(`/api/${session.sha1}/user_code.dsp`);
-      if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
-      const code = await response.text();
-      const appVersion = headerAppVersion ? headerAppVersion.textContent.replace(/^v/, '') : '';
-      const result = await installPwaApp({ code, filename: session.filename, voices: state.runGlobal.polyVoices || 0, appVersion });
-      if (win && !win.closed) win.location.href = result.url;
-      const mode = result.voices > 0 ? `${result.voices} voices${result.hasEffect ? ' + effect' : ''}` : 'mono';
-      showNotice(
-        win ? `${result.name} (${mode}) is ready in its window : install it from there.`
-          : `${result.name} (${mode}) is ready at ${result.url} (the window was blocked) : open it to install it.`,
-        win ? 8000 : 30000,
-      );
-    } catch (err) {
-      if (win && !win.closed) win.close();
-      throw err;
-    } finally {
-      hideLoading();
-    }
-    return;
   } else if (state.currentView === 'run') {
     // the PWA of the code the run view plays, at its voices (pwa-export.js)
     const response = await fetch(`/api/${session.sha1}/user_code.dsp`);

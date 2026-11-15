@@ -263,7 +263,7 @@ export function getName() {
  * Purpose: Implement `render` in the Run view.
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
-export async function render(container, { sha, runState, onRunStateChange, onDownload }) {
+export async function render(container, { sha, runState, onRunStateChange, onDownload, onInstallApp }) {
   const renderStartedAt = performance.now();
   logRunPerf('render:start', null, `sha=${sha} ua=${navigator.userAgent}`);
   // Live auto-refresh can re-render Run without a view switch.
@@ -317,10 +317,10 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
           <span>MIDI</span>
           <select id="midi-input"></select>
         </label>
+        <button id="run-pwa-btn" class="run-pwa-btn" type="button" title="Install as an app (PWA) : it opens in its window, with a button Install">pwa</button>
         <div class="download-select-group toolbar-download-right">
           <button id="run-download-btn" class="download-select-btn" type="button">Download</button>
           <select id="run-download-format" class="download-select-value" aria-label="Run download format">
-            <option value="app">app (install…)</option>
             <option value="pwa">pwa (.zip)</option>
           </select>
         </div>
@@ -411,6 +411,7 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
   const midiInputSelect = runRoot.querySelector('#midi-input');
   const downloadButton = runRoot.querySelector('#run-download-btn');
   const downloadFormatSelect = runRoot.querySelector('#run-download-format');
+  const pwaButton = runRoot.querySelector('#run-pwa-btn');
   const midiInlineEl = runRoot.querySelector('#run-midi-inline');
   const controlsEl = runRoot.querySelector('#run-controls');
   const scopeCanvas = runRoot.querySelector('#scope-canvas');
@@ -462,6 +463,10 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
   }
 
   updateRunNote();
+  if (pwaButton && typeof onInstallApp === 'function') {
+    // synchronous up to the window it opens : opened later, it would be a blocked pop-up
+    pwaButton.addEventListener('click', () => void onInstallApp());
+  }
   if (downloadButton && typeof onDownload === 'function') {
     downloadButton.addEventListener('click', () => {
       const format = downloadFormatSelect ? downloadFormatSelect.value : '';
