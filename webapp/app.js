@@ -1070,7 +1070,7 @@ function renderFileLabel(open = files.getOpen(), session = null) {
   const text = `${name}${dirty ? ' ●' : ''}${open ? ` · v${open.index + 1}/${open.count}` : ''}${ahead ? ' ⇡' : ''}`;
   if (sessionLabel.textContent !== text) sessionLabel.textContent = text;
   const from = open && open.file.store
-    ? ` From the store ${open.file.store.store} (${open.file.store.path})${ahead ? ', changed since : ⇡ Share ▸ Publish' : ''}.`
+    ? ` From the store ${open.file.store.store} (${open.file.store.path})${ahead ? ', changed since : ⇡ Export ▸ Publish' : ''}.`
     : '';
   const title = open
     ? `${open.file.name} — version ${open.index + 1} of ${open.count}${dirty ? ', unsaved changes' : ''} (${s.sha1.slice(0, 8)}).${from} Click : all files ; ◀ ▶ : versions.`
@@ -1549,7 +1549,7 @@ function hideInterface() {
 }
 
 /**
- * Share ▸ Apps ▸ Install : the saved version of the open file, at `voices`,
+ * Export ▸ Install : the saved version of the open file, at `voices`,
  * installed as an app (pwa-export.js, installPwaApp), its window opened.
  * Synchronous up to the window it opens : opened after an await, the
  * window would be blocked as a pop-up.
@@ -1595,7 +1595,7 @@ async function installAsApp(voices = 0) {
 // it is obsolete.
 document.addEventListener('faustcode:code-ok', () => hideError());
 
-/** Runs an action of the Share panel : its error shown, the loading overlay meanwhile when `busy`. */
+/** Runs an action of the Export panel : its error shown, the loading overlay meanwhile when `busy`. */
 async function shareAction(label, run, busy = false) {
   if (busy) showLoading();
   hideError();
@@ -1608,7 +1608,7 @@ async function shareAction(label, run, busy = false) {
   }
 }
 
-/** The Share panel (share-ui.js, spec_partage.md) for the version shown of the open file. */
+/** The Export panel (share-ui.js, spec_partage.md) for the version shown of the open file. */
 async function openShare() {
   const session = getCurrentSession();
   if (!session || !state.currentSha) return;
@@ -1649,7 +1649,7 @@ async function openShare() {
         showNotice(`${result.filename} downloaded (${mode}) : its README.txt tells how to serve it.`, 8000);
       }, true),
       publish: (store) => publishOpenFile(store),
-      // Share ▸ Publish ▸ As an app : the PWA at apps/ of the store, served by GitHub Pages
+      // Export ▸ Publish ▸ as an app : the PWA at apps/ of the store, served by GitHub Pages
       publishApp: async (store, voices, onStatus) => {
         if (getDraft(sha) !== null) throw new Error('Save your changes first : the saved version is published.');
         try {
@@ -1670,13 +1670,13 @@ async function openShare() {
 
 if (shareBtn) {
   shareBtn.addEventListener('click', () => {
-    openShare().catch((err) => showError(`Share failed: ${err.message}`));
+    openShare().catch((err) => showError(`Export failed: ${err.message}`));
   });
 }
 
 // The session opened in faustmodular, as a module of its open document
 // (playground-link.js : added, or updated when it is linked to a module) :
-// the faustmodular button, and Share ▸ Apps.
+// the faustmodular button, and Export ▸ Install ▸ Add to faustmodular.
 async function openInModular() {
   const session = getCurrentSession();
   if (!session || !state.currentSha) return;
@@ -2169,7 +2169,7 @@ async function publishOpenFile(store) {
   );
 }
 
-/** Share ▸ Files : the math documentation of the saved version of the open file. */
+/** Export ▸ Download : the math documentation of the saved version of the open file. */
 async function exportOpenMathdoc(lang) {
   const open = files.getOpen();
   if (!open) return;

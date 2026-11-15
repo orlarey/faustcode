@@ -11,8 +11,8 @@ language: fr
 ::: toc+
 - **Objet** — pourquoi regrouper.
 - **Ce qui existe** — sept gestes de sortie, dispersés.
-- **La thèse** — *File* pour écrire, *Share* pour tout ce qui sort, rangé par destinataire.
-- **Le panneau Share** — ses quatre onglets et ce qui leur est commun.
+- **La thèse** — *File* pour écrire, *Export* pour tout ce qui sort, en quatre verbes.
+- **Le panneau Export** — ses quatre onglets et ce qui leur est commun.
 - **Le QR code mène à l'application** — la page player, ou l'application publiée.
 - Maquette : <https://claude.ai/artifact/XTBqf8RjLSNdymheM6ukaY> (privée).
 - **Ce qui disparaît, ce qui reste** — et les trois décisions ouvertes.
@@ -42,42 +42,46 @@ Le cas qui doit devenir simple est celui de la **démonstration et du workshop**
 # La thèse
 
 - **File** sert à *écrire* : nouveau, ouvrir, sauvegarder, versions, ouvrir depuis un store. Rien n'y sort de faustcode.
-- **Share** est l'unique point d'entrée de *tout ce qui sort* de faustcode, rangé non par format mais par **destinataire**, parce que c'est la question qu'on se pose : *à qui, ou à quoi, est-ce que je le donne ?*
+- **Export** est l'unique point d'entrée de *tout ce qui sort* de faustcode : *faire sortir* le module, pour des personnes, une application, un fichier ou un store. Ses quatre onglets portent chacun un **verbe**, le geste qu'on fait du module.
 
-| Onglet | Destinataire | Question à laquelle il répond |
+| Onglet | Vers | Question à laquelle il répond |
 | :-- | :-- | :-- |
-| **Audience** | des personnes, souvent sur téléphone | « Comment la salle joue-t-elle mon module ? » |
-| **Apps** | une application, sur cet ordinateur ou dans faustmodular | « Où est-ce que je l'utilise ensuite ? » |
-| **Files** | un fichier | « Quel fichier est-ce que je télécharge ? » |
+| **Share** | des personnes, souvent sur téléphone | « Comment la salle joue-t-elle mon module ? » |
+| **Install** | cet ordinateur, ou faustmodular | « Où est-ce que je l'utilise ensuite ? » |
+| **Download** | un fichier | « Quel fichier est-ce que je télécharge ? » |
 | **Publish** | un store GitHub | « Comment le rendre durable et partageable par un lien court ? » |
+
+::: note [Les noms]
+Choisis le 15 novembre 2026 avec Yann Orlarey, après une première version par destinataire (*Audience*, *Apps*, *Files*). *Export* nomme le bouton d'en-tête et le titre du panneau (*Export organ.dsp · v3/5*), au sens de faire sortir de faustcode ; *Share* n'est plus que l'un des gestes, le plus fréquent : premier onglet, et onglet par défaut à la première ouverture. L'info-bulle du bouton cite les quatre gestes, pour qui cherche *Share*.
+:::
 
 Rec reste dans la vue Run : enregistrer est un geste de jeu, pas une sortie du module.
 
-# Le panneau Share
+# Le panneau Export
 
 ## Ce qui est commun aux onglets
 
 - **Ce qui est partagé** est la *version affichée* du fichier ouvert (`files.getOpen()`), celle que montre l'en-tête `organ.dsp · v3/5`. Si l'éditeur contient des modifications non sauvegardées, un bandeau le dit : *« Modifications non sauvegardées : Save pour les inclure »*. Rien n'est partagé d'un brouillon, comme pour Publish aujourd'hui.
 - **Les voix** : un sélecteur *Mono / 1 / 2 / 4 / 8 / 16 / 32 / 64* dans l'en-tête du panneau, initialisé à la polyphonie de la vue Run (`state.runGlobal.polyVoices`). Il vaut pour le lien (`poly`), l'application installée et la PWA en `.zip` : on ne choisit les voix qu'une fois.
-- **Un `.lib`** n'a pas de `process` : Audience, Apps et la PWA sont grisés, avec la raison ; Files propose le `.lib` lui-même ; Publish le refuse déjà.
-- **Un code qui ne compile pas** : seuls Files ▸ `.dsp` et Audience ▸ *éditer* restent possibles.
-- Le dernier onglet utilisé est retenu (`localStorage`, par confort seulement).
+- **Un `.lib`** n'a pas de `process` : Share, Install et la PWA sont grisés, avec la raison ; Download propose le `.lib` lui-même ; Publish le refuse déjà.
+- **Un code qui ne compile pas** : seuls Download ▸ `.dsp` et Share ▸ *éditer* restent possibles.
+- Le dernier onglet utilisé est retenu (`localStorage`, par confort seulement) ; les noms d'avant 0.25.0 retenus (`audience`, `apps`, `files`) valent leurs successeurs.
 
-## Audience
+## Share
 
-Le contenu actuel du dialogue Share, avec un choix de plus.
+Le contenu de l'ancien dialogue Share, avec un choix de plus.
 
 - **Jouer** ou **éditer** : *jouer* mène à l'application (ci-dessous) ; *éditer* ouvre faustcode sur la vue dsp (`view=dsp`). Défaut : jouer.
 - La source du lien : **avec le code** (toujours possible), **du store** (fichier publié et inchangé depuis), **application publiée** (publiée comme application, inchangée depuis, et servie). La meilleure disponible est choisie par défaut : application publiée, puis store, puis code.
 - QR code, **Projection** (plein écran, nom du module), **Copy link**.
 - Quand le lien dépasse la capacité d'un QR code (environ 2 950 octets en niveau L) ou sa lisibilité de loin (1 000 caractères), le message existant renvoie désormais vers l'onglet **Publish** : un module publié a un lien court.
 
-## Apps
+## Install
 
-- **Installer sur cet ordinateur** : `installPwaApp` (aujourd'hui le bouton *pwa* de la vue Run). La fenêtre de l'application s'ouvre avec son bouton Installer.
-- **Ouvrir dans faustmodular** : le module ouvert dans faustmodular et lié, mis à jour à chaque sauvegarde (aujourd'hui le bouton *faustmodular*).
+- **Install on this computer** : `installPwaApp` (avant : le bouton *pwa* de la vue Run). La fenêtre de l'application s'ouvre avec son bouton Installer.
+- **Add to faustmodular** : le module ajouté au document ouvert de faustmodular et lié, mis à jour à chaque sauvegarde (aussi : le bouton *faustmodular* de l'en-tête).
 
-## Files
+## Download
 
 | Fichier | Contenu | Aujourd'hui |
 | :-- | :-- | :-- |
@@ -93,7 +97,7 @@ Deux publications, dans le même store :
 - **Le module** : l'entrée *File ▸ Publish to …* déplacée ici, inchangée (`stores-ui.publishFile`) ;
 - **As an app** : la PWA compilée, à côté du module (voir *L'application publiée*).
 
-Pour l'une comme pour l'autre : un store en écriture, ou plusieurs au choix ; sans store en écriture, un lien vers *File ▸ Stores…* pour en suivre un et donner son jeton. Après publication, le lien court copié et l'onglet Audience proposé, son QR code prêt.
+Pour l'une comme pour l'autre : un store en écriture, ou plusieurs au choix ; sans store en écriture, un lien vers *File ▸ Stores…* pour en suivre un et donner son jeton. Après publication, le lien court copié et l'onglet Share proposé, son QR code prêt.
 
 # Le QR code mène à l'application
 
@@ -123,8 +127,8 @@ Le player et l'application installée sont une seule et même page : rien à mai
 
 ## L'application publiée : le lien direct
 
-- *Share ▸ Publish ▸ As an app* compile le module aux voix choisies et écrit la PWA (les fichiers de `pwaEntries`, son service worker compris) dans le store, à `apps/<nom>/`, en un commit, à côté du module.
-- GitHub Pages sert alors l'application à `https://<owner>.github.io/<repo>/apps/<nom>/`, environ une minute après le commit. L'onglet Audience propose ce lien dès qu'il répond : court, immédiat, durable, indépendant de faustcode.
+- *Export ▸ Publish ▸ As an app* compile le module aux voix choisies et écrit la PWA (les fichiers de `pwaEntries`, son service worker compris) dans le store, à `apps/<nom>/`, en un commit, à côté du module.
+- GitHub Pages sert alors l'application à `https://<owner>.github.io/<repo>/apps/<nom>/`, environ une minute après le commit. L'onglet Share propose ce lien dès qu'il répond : court, immédiat, durable, indépendant de faustcode.
 - Republier met l'application à jour ; le service worker de la PWA (nom de cache daté) remplace l'ancienne version chez ceux qui l'ont installée.
 
 ## Le circuit de l'application publiée
@@ -149,12 +153,12 @@ La machine du démonstrateur ne sert jamais rien aux téléphones : elle compile
 **Avant la présentation.**
 
 3. Le module sauvegardé, les voix choisies dans le panneau.
-4. *Share ▸ Publish ▸ As an app* : faustcode compile le module comme la vue Run (`dsp-module.wasm`, `dsp-meta.json`, le mixer et l'effet en poly), y joint les fichiers de la PWA (environ 450 Ko, 90 Ko compressés) et les envoie **en un commit**, par l'API de GitHub, à `apps/<nom>/` du store, avec un fichier `.nojekyll` à la racine s'il n'y est pas (sans lui, Jekyll ignore les fichiers dont le nom commence par `_`).
-5. GitHub Pages déploie en 30 s à 1 min. faustcode interroge l'adresse jusqu'à ce qu'elle réponde, puis l'onglet Audience propose `https://<owner>.github.io/<store>/apps/<nom>/` : une cinquantaine de caractères, un QR code peu dense, lisible du fond de la salle.
+4. *Export ▸ Publish ▸ As an app* : faustcode compile le module comme la vue Run (`dsp-module.wasm`, `dsp-meta.json`, le mixer et l'effet en poly), y joint les fichiers de la PWA (environ 450 Ko, 90 Ko compressés) et les envoie **en un commit**, par l'API de GitHub, à `apps/<nom>/` du store, avec un fichier `.nojekyll` à la racine s'il n'y est pas (sans lui, Jekyll ignore les fichiers dont le nom commence par `_`).
+5. GitHub Pages déploie en 30 s à 1 min. faustcode interroge l'adresse jusqu'à ce qu'elle réponde, puis l'onglet Share propose `https://<owner>.github.io/<store>/apps/<nom>/` : une cinquantaine de caractères, un QR code peu dense, lisible du fond de la salle.
 
 **Pendant la présentation.**
 
-6. *Share ▸ Audience ▸ Published app ▸ Projection* : le QR code en plein écran.
+6. *Export ▸ Share ▸ Published app ▸ Projection* : le QR code en plein écran.
 7. Le participant le flashe ; son navigateur charge l'application **depuis GitHub**, sans passer par la machine du démonstrateur. Les téléphones ont besoin d'Internet ; la machine du démonstrateur, plus à ce stade.
 8. Le premier toucher démarre le son (et demande l'accès aux capteurs sur iOS).
 9. Le service worker de l'application s'enregistre et met ses fichiers en cache (avec la correction de `faust-pwa.js`, signalée en amont).
@@ -176,12 +180,12 @@ La machine du démonstrateur ne sert jamais rien aux téléphones : elle compile
 
 | Élément | Devient |
 | :-- | :-- |
-| File ▸ Publish to … | Share ▸ Publish |
-| File ▸ Math documentation | Share ▸ Files |
-| Download des vues dsp, svg, run | Share ▸ Files *(décision 2)* |
-| bouton *pwa* de la vue Run | Share ▸ Apps |
+| File ▸ Publish to … | Export ▸ Publish |
+| File ▸ Math documentation | Export ▸ Download |
+| Download des vues dsp, svg, run | Export ▸ Download *(décision 2)* |
+| bouton *pwa* de la vue Run | Export ▸ Install |
 | QR code vers l'IDE (vue Run) | QR code vers l'application |
-| bouton *faustmodular* | Share ▸ Apps, et raccourci conservé *(décision 1)* |
+| bouton *faustmodular* | Export ▸ Install ▸ Add to faustmodular, et raccourci conservé *(décision 1)* |
 | Rec | reste dans la vue Run |
 | File | nouveau, ouvrir, sauvegarder, versions, stores (lecture) |
 
@@ -198,9 +202,9 @@ Prises le 15 novembre 2026 : la 3 par Yann Orlarey ; la 1 et la 2 selon la propo
 - `share-ui.js` : le dialogue devient un panneau à onglets ; `buildQr`, la projection et la copie inchangés ; le sélecteur de voix et le bandeau de brouillon en tête.
 - `play.html`, `play.js` : la page player ; `share-link.js` lui fournit le décodage des liens (`decodeShareParams`) et la construction de son adresse (`buildPlayUrl`).
 - `pwa-export.js` : l'empreinte du code et des voix dans le manifeste de l'application, pour reconnaître une application déjà installée.
-- `app-publish.js` : *Publish ▸ As an app* — les fichiers de `pwaEntries` (empreinte dans le manifeste) à `apps/<nom>/` avec `.nojekyll`, en un commit par `Publishing.publish` de fauststore ; l'adresse de Pages (API `/pages`, sinon `owner.github.io/repo/`) ; la disponibilité en lisant l'empreinte du `manifest.json` servi (Pages répond avec `Access-Control-Allow-Origin: *`) ; les applications publiées depuis ce navigateur retenues par empreinte, pour qu'Audience propose leur lien.
+- `app-publish.js` : *Publish ▸ As an app* — les fichiers de `pwaEntries` (empreinte dans le manifeste) à `apps/<nom>/` avec `.nojekyll`, en un commit par `Publishing.publish` de fauststore ; l'adresse de Pages (API `/pages`, sinon `owner.github.io/repo/`) ; la disponibilité en lisant l'empreinte du `manifest.json` servi (Pages répond avec `Access-Control-Allow-Origin: *`) ; les applications publiées depuis ce navigateur retenues par empreinte, pour que Share propose leur lien.
 - `pwa-export.js`, `mathdoc-export.js`, `stores-ui.js` : réutilisés tels quels depuis le panneau.
-- `app.js` : retrait des entrées du menu File, des Download et du bouton *pwa* ; le bouton *Share* ouvre le panneau sur le dernier onglet.
+- `app.js` : retrait des entrées du menu File, des Download et du bouton *pwa* ; le bouton *Export* ouvre le panneau sur le dernier onglet.
 - MCP : un outil `get_share_link` (lien, `play` ou `dsp`, voix) rendrait le partage scriptable ; à prévoir dans `tools.json` et `MCP-SPEC.md`.
 
 # Hors périmètre
@@ -210,7 +214,7 @@ Prises le 15 novembre 2026 : la 3 par Yann Orlarey ; la 1 et la 2 selon la propo
 
 # Critères d'acceptation
 
-1. Tout geste de sortie s'atteint par *Share* en deux clics au plus ; File ne contient plus d'action qui sorte de faustcode.
+1. Tout geste de sortie s'atteint par *Export* en deux clics au plus ; File ne contient plus d'action qui sorte de faustcode.
 2. Le sélecteur de voix du panneau fixe la polyphonie du lien, de l'application installée et de la PWA en `.zip`.
 3. Un brouillon non sauvegardé est signalé, et rien n'en est partagé.
 4. Un QR *jouer* projeté, flashé avec un téléphone Android (Chrome) et un iPhone (Safari), mène à l'application sans jamais montrer l'IDE : le module se joue après un geste, l'application s'installe (bouton, ou *Sur l'écran d'accueil*), puis fonctionne hors ligne ; un second scan du même module l'ouvre aussitôt.

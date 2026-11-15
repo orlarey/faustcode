@@ -510,19 +510,19 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   display: none;
 }
 
-.share-audience {
+.share-links {
   display: flex;
   gap: var(--ui-space-4);
   align-items: flex-start;
 }
 
-.share-audience .share-qr {
+.share-links .share-qr {
   flex: none;
   border-radius: 4px;
   overflow: hidden;
 }
 
-.share-audience-side {
+.share-links-side {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -530,12 +530,12 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   gap: var(--ui-space-2);
 }
 
-.share-audience .share-url {
+.share-links .share-url {
   min-width: 0;
   resize: none;
 }
 
-.share-audience .share-warning {
+.share-links .share-warning {
   text-align: left;
 }
 
@@ -584,7 +584,7 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   cursor: default;
 }
 
-.share-apps,
+.share-install,
 .share-publish {
   display: flex;
   flex-direction: column;
@@ -643,7 +643,7 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   opacity: 0.5;
 }
 
-.share-files {
+.share-download {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--ui-toolbar-border);
@@ -715,12 +715,12 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
     min-width: 4.6rem;
   }
 
-  .share-audience {
+  .share-links {
     flex-direction: column;
     align-items: center;
   }
 
-  .share-audience-side {
+  .share-links-side {
     align-self: stretch;
   }
 

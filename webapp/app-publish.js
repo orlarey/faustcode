@@ -1,4 +1,4 @@
-// app-publish.js — Share ▸ Publish ▸ As an app (spec_partage.md, « Le
+// app-publish.js — Export ▸ Publish ▸ as an app (spec_partage.md, « Le
 // circuit de l'application publiée ») : the PWA of a module, compiled in the
 // page, written in one commit to apps/<name>/ of a store, then served by
 // GitHub Pages at https://<owner>.github.io/<repo>/apps/<name>/. Its QR

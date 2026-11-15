@@ -1,9 +1,9 @@
-// share-ui.js — the Share panel (spec_partage.md) : everything that leaves
-// faustcode, by destination, in four tabs :
-//   Audience : a link and its QR code (Projection, Copy link) ;
-//   Apps     : install as an app on this computer, open in faustmodular ;
-//   Files    : .dsp, the diagrams, the math documentation, the PWA ;
-//   Publish  : the module to a store.
+// share-ui.js — the Export panel (spec_partage.md) : everything that leaves
+// faustcode, in four tabs, each a verb :
+//   Share    : a link and its QR code (Projection, Copy link) ;
+//   Install  : as an app on this computer ; add to faustmodular ;
+//   Download : .dsp, the diagrams, the math documentation, the PWA ;
+//   Publish  : to a store, the module or its app.
 // The voices are chosen once, in the head of the panel, for the link, the
 // app and the PWA. The panel only shows and asks : the work is done by the
 // actions app.js gives it (openSharePanel).
@@ -15,14 +15,16 @@ export const LONG_LINK_CHARS = 1000;
 const MIN_MODULE_PX = 4;
 const QUIET_ZONE = 4; // modules of white margin required around a QR code
 
-export const SHARE_TABS = ['audience', 'apps', 'files', 'publish'];
+export const SHARE_TABS = ['share', 'install', 'download', 'publish'];
+// the names of the tabs before 0.25.0, remembered by some browsers
+const OLD_TABS = { audience: 'share', apps: 'install', files: 'download' };
 export const SHARE_VOICES = [0, 1, 2, 4, 8, 16, 32, 64];
-const TAB_LABELS = { audience: 'Audience', apps: 'Apps', files: 'Files', publish: 'Publish' };
+const TAB_LABELS = { share: 'Share', install: 'Install', download: 'Download', publish: 'Publish' };
 const TAB_HINTS = {
-  audience: 'people, on their phone',
-  apps: 'this computer, faustmodular',
-  files: 'a file to download',
-  publish: 'a store : durable, short link',
+  share: 'with people, on their phone',
+  install: 'on this computer, in faustmodular',
+  download: 'a file',
+  publish: 'to a store : durable, short link',
 };
 const MATHDOC_LANGS = [
   ['en', 'English'],
@@ -82,7 +84,8 @@ export function shareAvailability({ isLib = false, errors = '' } = {}) {
 
 function readTab() {
   try {
-    const t = localStorage.getItem(TAB_KEY);
+    const saved = localStorage.getItem(TAB_KEY);
+    const t = OLD_TABS[saved] || saved;
     return SHARE_TABS.includes(t) ? t : null;
   } catch {
     return null;
@@ -134,7 +137,7 @@ export async function openSharePanel(ctx) {
   const actions = ctx.actions || {};
   const can = shareAvailability(ctx);
   const st = {
-    tab: readTab() || 'audience',
+    tab: readTab() || 'share',
     voices: SHARE_VOICES.includes(Number(ctx.voices)) ? Number(ctx.voices) : 0,
     opens: can.play ? 'edit' : 'play',
     source: ctx.storeUrl ? 'store' : 'code',
@@ -150,7 +153,7 @@ export async function openSharePanel(ctx) {
   voicesSelect.value = String(st.voices);
   const closeBtn = el('button', { type: 'button', class: 'icon-btn share-close', 'aria-label': 'Close', text: '✕' });
   const head = el('div', { class: 'share-head' },
-    el('h2', { text: 'Share' }),
+    el('h2', { text: 'Export' }),
     el('span', { class: 'share-file', text: `${ctx.filename || ''}${ctx.version ? ` · ${ctx.version}` : ''}` }),
     el('span', { class: 'share-spacer' }),
     el('label', { class: 'share-voices' }, el('span', { text: 'Voices' }), voicesSelect),
@@ -169,7 +172,7 @@ export async function openSharePanel(ctx) {
   }
   tabList.append(el('span', { class: 'share-spacer' }), tabHint);
 
-  // ---- Audience
+  // ---- Share
   const qrEl = el('div', { class: 'share-qr' });
   const seg = (name, items) => {
     const box = el('div', { class: 'share-seg', role: 'radiogroup', 'aria-label': name });
@@ -190,15 +193,15 @@ export async function openSharePanel(ctx) {
   const urlEl = el('textarea', { class: 'share-url', readonly: true, rows: '4', spellcheck: 'false', 'aria-label': 'Link' });
   const projectBtn = el('button', { type: 'button', class: 'primary-btn share-project', text: 'Projection' });
   const copyBtn = el('button', { type: 'button', class: 'primary-btn share-copy', text: 'Copy link' });
-  const audience = el('div', { class: 'share-pane share-audience' },
+  const share = el('div', { class: 'share-pane share-links' },
     qrEl,
-    el('div', { class: 'share-audience-side' },
+    el('div', { class: 'share-links-side' },
       el('div', { class: 'share-row' }, el('span', { class: 'share-row-label', text: 'Opens' }), opensSeg.box, opensText),
       sourceRow,
       metaEl, warnEl, urlEl,
       el('div', { class: 'share-actions' }, projectBtn, copyBtn)));
 
-  // ---- cards (Apps, Publish)
+  // ---- cards (Install, Publish)
   const card = (title, text, buttonLabel, onClick, reason, primary = false) => {
     const b = el('button', { type: 'button', class: primary ? 'primary-btn share-go is-primary' : 'primary-btn share-go', text: buttonLabel, disabled: !!reason });
     if (!reason) b.addEventListener('click', onClick);
@@ -208,19 +211,19 @@ export async function openSharePanel(ctx) {
         el('div', { class: 'share-card-desc', text: reason || text })),
       b);
   };
-  const apps = el('div', { class: 'share-pane share-apps' },
+  const install = el('div', { class: 'share-pane share-install' },
     card('Install on this computer', '', 'Install', () => {
       // synchronous up to the window it opens (a pop-up otherwise)
       void actions.installApp(st.voices);
       closeShareDialog();
     }, can.apps, true),
-    card('Open in faustmodular', 'As a module of its open document. Linked : each Save updates the module.', 'Open', () => {
+    card('Add to faustmodular', 'As a module of its open document. Linked : each Save updates the module.', 'Add', () => {
       void actions.openInModular();
       closeShareDialog();
     }, can.apps));
-  const installDesc = apps.querySelector('.share-card-desc');
+  const installDesc = install.querySelector('.share-card-desc');
 
-  // ---- Files
+  // ---- Download
   const langSelect = el('select', { class: 'share-lang', 'aria-label': 'Language of the documentation' },
     ...MATHDOC_LANGS.map(([v, l]) => el('option', { value: v, text: l })));
   try {
@@ -236,7 +239,7 @@ export async function openSharePanel(ctx) {
       typeof what === 'string' ? el('span', { class: 'share-file-what', text: reason || what }) : what,
       extra, b);
   };
-  const files = el('div', { class: 'share-pane share-files' },
+  const download = el('div', { class: 'share-pane share-download' },
     fileRow(ctx.filename || `${base}.dsp`, 'the source of the version shown', () => actions.downloadDsp(), null),
     fileRow(`${base}-svg.zip`, 'every block diagram', () => actions.downloadDiagrams(), can.diagrams),
     fileRow(`${base}-mdoc.zip`, 'the mathematical documentation (LaTeX)', () => actions.downloadMathdoc(langSelect.value), can.diagrams, can.diagrams ? null : langSelect),
@@ -282,13 +285,13 @@ export async function openSharePanel(ctx) {
             statusEl.append('Published ; GitHub Pages does not serve it yet (it can take a few minutes) : ',
               el('a', { href: result.url, target: '_blank', rel: 'noopener', text: result.url }), '.');
           } else {
-            statusEl.append('Live at ', el('a', { href: result.url, target: '_blank', rel: 'noopener', text: result.url }), ' : Audience shows its QR code.');
+            statusEl.append('Live at ', el('a', { href: result.url, target: '_blank', rel: 'noopener', text: result.url }), ' : Share shows its QR code.');
           }
           st.appUrl = result.url;
           st.opens = 'play';
           st.source = 'app';
           await refreshLink();
-          if (result.live) showTab('audience');
+          if (result.live) showTab('share');
         } catch (err) {
           statusEl.classList.add('error');
           statusEl.textContent = err && err.message ? err.message : String(err);
@@ -302,7 +305,7 @@ export async function openSharePanel(ctx) {
   const appDescribers = [];
   const publishRows = stores.length
     ? stores.flatMap((store) => [card(`Publish ${ctx.filename} to ${store}`,
-      'The saved version, as a module of the store, in one commit. Its short link is copied, and Audience then offers it : a QR code readable from the back of the room.',
+      'The saved version, as a module of the store, in one commit. Its short link is copied, and Share then offers it : a QR code readable from the back of the room.',
       'Publish', () => {
         closeShareDialog();
         void actions.publish(store);
@@ -313,9 +316,9 @@ export async function openSharePanel(ctx) {
     }, null)];
   const publish = el('div', { class: 'share-pane share-publish' }, ...publishRows);
 
-  const panes = { audience, apps, files, publish };
-  const cardEl = el('div', { class: 'share-card share-panel' }, head, banner, tabList, audience, apps, files, publish);
-  const backdrop = el('div', { class: 'share-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Share' }, cardEl);
+  const panes = { share, install, download, publish };
+  const cardEl = el('div', { class: 'share-card share-panel' }, head, banner, tabList, share, install, download, publish);
+  const backdrop = el('div', { class: 'share-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': `Export ${ctx.filename || ''}` }, cardEl);
 
   // ---- behaviour
   const showTab = (tab) => {

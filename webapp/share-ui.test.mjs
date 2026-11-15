@@ -4,8 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SHARE_TABS, SHARE_VOICES, shareAvailability, voicesLabel } from './share-ui.js';
 
-test('the four tabs, by destination', () => {
-  assert.deepEqual(SHARE_TABS, ['audience', 'apps', 'files', 'publish']);
+test('the four tabs, each a verb', () => {
+  assert.deepEqual(SHARE_TABS, ['share', 'install', 'download', 'publish']);
   assert.deepEqual(SHARE_VOICES, [0, 1, 2, 4, 8, 16, 32, 64]);
 });
 

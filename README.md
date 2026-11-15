@@ -62,12 +62,12 @@ don't have to fight Chrome's ES module cache while iterating.
   one opens as a file linked to the store. A link opens any `.dsp` of
   GitHub : `?file=<its address on GitHub>` (or `?store=owner/repo&file=
   <path>&ref=<commit>`) ; `?store=owner/repo` shows the modules of a
-  store. Share offers the link of the store (short, at the commit read)
+  store. Export ▸ Share offers the link of the store (short, at the commit read)
   for a module unchanged since it was opened.
 - **Publishing** (0.18.0) : a click on the *read* badge of a store (File ▸
   Stores…) asks for a token of GitHub (fine-grained, this repository only,
   Contents read and write), checked before it is kept ; faustmodular uses
-  it too. Share ▸ Publish publishes the current version of the open
+  it too. Export ▸ Publish publishes the current version of the open
   file as a module of the store, in one commit, the index made again : a
   new module, or a new version of the module it was opened from. It warns
   when someone else published since, offers another name when the path
@@ -75,11 +75,12 @@ don't have to fight Chrome's ES module cache while iterating.
   `.lib`, or a code that imports a `.lib` of faustcode. The link to share
   it, at the commit published, is copied. `⇡` in the header : the file
   changed since the store.
-- **Share** (0.22.0, `spec_partage.md`) : everything that leaves faustcode
-  goes through the **Share** button, by destination, for the saved version
+- **Export** (0.22.0, named so in 0.25.0, `spec_partage.md`) : everything
+  that leaves faustcode goes through the **Export** button, in four tabs,
+  each a verb, for the saved version
   of the open file (unsaved changes are said, not shared), at the voices
   chosen once in the head of the panel :
-  - **Audience** : a link and its QR code (Projection, Copy link), to play
+  - **Share** : a link and its QR code (Projection, Copy link), to play
     the module or to edit its code ; the link of the store for a module
     published and unchanged. *Play* opens `play.html` (0.23.0), never the
     editor : it builds the app of the module on the phone (libfaust, a few
@@ -87,9 +88,9 @@ don't have to fight Chrome's ES module cache while iterating.
     ready to install ; the same code at the same voices opens at once the
     second time (the fingerprint in its manifest). Old `?code=…&view=run`
     links still open the run view ;
-  - **Apps** : install as an app on this computer ; open in faustmodular
-    (the faustmodular button of the header does it too) ;
-  - **Files** : `.dsp`, the diagrams, the math documentation, the PWA ;
+  - **Install** : as an app on this computer ; add to faustmodular (the
+    faustmodular button of the header does it too) ;
+  - **Download** : `.dsp`, the diagrams, the math documentation, the PWA ;
   - **Publish** : to a store, the module ; or **as an app** (0.24.0) :
     the PWA compiled at the voices of the panel, committed with a
     `.nojekyll` to `apps/<name>/` of the store, and served by GitHub Pages
@@ -97,7 +98,7 @@ don't have to fight Chrome's ES module cache while iterating.
     Pages on the store once (Settings ▸ Pages ▸ Deploy from a branch ▸
     `main` ▸ `/ (root)` ; the repository public) ; faustcode waits for
     the deployment (30 s to 1 min) by reading the fingerprint of the
-    manifest served, then Audience offers this short link : its QR code
+    manifest served, then Share offers this short link : its QR code
     opens the app at once, without faustcode. The index of the store
     ignores `apps/`. Installed apps update after being closed and opened
     again (the service worker of faustwasm does not `skipWaiting`).
@@ -105,7 +106,7 @@ don't have to fight Chrome's ES module cache while iterating.
   File only writes : new, open, save, versions, stores to open from. A
   `.lib`, or a code that does not compile, greys what does not apply, and
   says why.
-- **Math documentation** (0.19.0) : Share ▸ Files ▸ `<name>-mdoc.zip`
+- **Math documentation** (0.19.0) : Export ▸ Download ▸ `<name>-mdoc.zip`
   (English, Français, Deutsch or Italiano) downloads what
   `faust -mdoc -mdlang <lang>` makes for the saved version : `tex/<name>.tex` (the equations of the signals, the controls,
   the block diagram, the listings), `svg/`, `src/` (the sources, the
@@ -125,14 +126,14 @@ don't have to fight Chrome's ES module cache while iterating.
   The document lists the program and the `.lib` files of faustcode, not
   the libraries of Faust (140 pages for `stdfaust.lib` ; they stay in
   `src/`) : `<listing dependencies="true"/>` in a `<mdoc>` lists them too.
-- **PWA** (0.20.0) : Share ▸ Files ▸ `<name>-pwa.zip`, what
+- **PWA** (0.20.0) : Export ▸ Download ▸ `<name>-pwa.zip`, what
   `faust2wasm -pwa` of faustwasm makes, in the page : the saved version,
   compiled as the run view compiles it (mono, or poly at the voices of the
   panel, with the `effect` of the code), and the templates of faustwasm
   0.20.1 (`webapp/vendor/faust-pwa/`). Serve the folder by HTTP
   (`python3 -m http.server`) ; in HTTPS it installs and runs offline.
-  Share ▸ Files ▸ `<name>-svg.zip` : every diagram.
-- **Apps** (0.21.0) : Share ▸ Apps ▸ Install installs the program at
+  Export ▸ Download ▸ `<name>-svg.zip` : every diagram.
+- **Apps** (0.21.0) : Export ▸ Install installs the program at
   once, at the voices of the panel, as an app of faustcode's origin, at
   `apps/<name>/` : its window opens with an Install button (Chrome, Edge ;
   Safari : File ▸ Add to Dock, Share ▸ Add to Home Screen). The files live
