@@ -83,9 +83,12 @@ don't have to fight Chrome's ES module cache while iterating.
   libraries and the `.lib` files of faustcode included). The documentator
   of the libfaust of the page does it ; `webapp/mathdoc.js` gives it its
   files (`webapp/vendor/faust-mathdoc/`), escapes the texts Faust copies
-  raw into the LaTeX (labels, units, metadata : a `_`, `%` or `&` stops
-  pdflatex), and adds a PNG at 300 dpi of each diagram the document
-  includes, so `cd tex && pdflatex -output-directory=../pdf <name>.tex`
+  raw into the LaTeX (labels, units, metadata : a `&` stops pdflatex, a
+  `%` drops the end of the line, a `_` prints a dot), gives every
+  character beyond ASCII to `listings` (which stops on the `π`, `μ`, `≤`
+  of the comments of the libraries) and to `inputenc` (accents, Greek,
+  mathematics ; emoji and the like are printed as `[U+1F3B5]`), and adds
+  a PNG at 300 dpi of each diagram the document includes, so `cd tex && pdflatex -output-directory=../pdf <name>.tex`
   (twice) makes the PDF ; `README.txt` in the archive tells the rest.
   Write `<mdoc>…</mdoc>` in the code (not in a comment) to write the
   document yourself, with `<equation>`, `<diagram>`, `<metadata>`,

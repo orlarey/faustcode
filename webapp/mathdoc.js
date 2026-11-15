@@ -18,7 +18,11 @@
 //     units and groups of the controls, and, in the document made when the
 //     program has no <mdoc> tag, its title and the table of the metadata
 //     (`compile_options`, `filters.lib/lowpass0_highpass1:author`…) — are
-//     escaped : a `_`, `%` or `&` in them stops pdflatex ;
+//     escaped : a `&` in them stops pdflatex, a `%` drops the end of the line,
+//     a `_` prints a dot (breqn changes its catcode : `compile˙options`) ;
+//   - declareUnicode : each character beyond ASCII given to listings in ASCII
+//     (`literate`) and to inputenc (\DeclareUnicodeCharacter) : the comments of
+//     the libraries have π, μ, ≤, →, which stopped pdflatex in the listings ;
 //   - a PNG of each diagram the document includes (\includegraphics{../svg/…}
 //     has no extension : pdflatex takes the .png, or a .pdf the user makes) ;
 //   - README.txt : how to make the PDF.
@@ -125,7 +129,99 @@ export function fixMathdocTex(tex, { autodoc = false } = {}) {
       return `${head}\\begin{tabular}{@{}p{0.36\\textwidth}p{0.6\\textwidth}@{}}${rows}\\end{tabular}`;
     });
   }
-  return out;
+  return declareUnicode(out);
+}
+
+// ---------------------------------------------------------------------
+// The characters beyond ASCII
+// ---------------------------------------------------------------------
+//
+// listings reads its text byte by byte : a character of several bytes of
+// UTF-8 is a fatal `Invalid UTF-8 byte sequence (\lst@EC)`, unless the
+// `literate` of its \lstset has it ; latexheader.tex has 16 (áàäâéèëêïîöôùûçÇ),
+// and the libraries of Faust have π, μ, ≤, → in their comments. Each other
+// character of the document gets an entry `{c}{{latex}}1` (the replacement
+// in ASCII : the character itself there loops listings), and a
+// \DeclareUnicodeCharacter with the same LaTeX for the text outside the
+// listings (OT1 lacks the guillemets, Greek, mathematics…).
+
+const GREEK = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi o pi rho varsigma sigma tau upsilon phi chi psi omega'.split(' ');
+const GREEK_UPPER = 'A B Gamma Delta E Z H Theta I K Lambda M N Xi O Pi P - Sigma T Upsilon Phi X Psi Omega'.split(' ');
+
+/** The characters set in mathematics. */
+const UNICODE_MATH = {
+  '≤': '\\leq', '≥': '\\geq', '≠': '\\neq', '≈': '\\approx', '≡': '\\equiv', '∼': '\\sim', '∝': '\\propto',
+  '≪': '\\ll', '≫': '\\gg', '→': '\\rightarrow', '←': '\\leftarrow', '↔': '\\leftrightarrow', '↑': '\\uparrow',
+  '↓': '\\downarrow', '⇒': '\\Rightarrow', '⇐': '\\Leftarrow', '⇔': '\\Leftrightarrow', '↦': '\\mapsto',
+  '∞': '\\infty', '√': '\\surd', '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '∂': '\\partial', '∇': '\\nabla',
+  '∆': '\\Delta', 'Ω': '\\Omega', '∈': '\\in', '∉': '\\notin', '∀': '\\forall', '∃': '\\exists',
+  '∅': '\\emptyset', '∩': '\\cap', '∪': '\\cup', '⊂': '\\subset', '⊆': '\\subseteq', '∘': '\\circ',
+  '⋅': '\\cdot', '∙': '\\cdot', '·': '\\cdot', '−': '-', '±': '\\pm', '∓': '\\mp', '×': '\\times', '÷': '\\div',
+  '¬': '\\neg', '°': '^{\\circ}', 'µ': '\\mu', '′': '\\prime', '⌊': '\\lfloor', '⌋': '\\rfloor', '⌈': '\\lceil',
+  '⌉': '\\rceil', '⟨': '\\langle', '⟩': '\\rangle', '«': '\\ll', '»': '\\gg', '¼': '\\frac{1}{4}', '½': '\\frac{1}{2}',
+  '¾': '\\frac{3}{4}', 'ℝ': '\\mathbf{R}', 'ℤ': '\\mathbf{Z}', 'ℕ': '\\mathbf{N}', 'ℂ': '\\mathbf{C}', 'ℚ': '\\mathbf{Q}',
+  '¹': '^{1}', '²': '^{2}', '³': '^{3}', '⁺': '^{+}', '⁻': '^{-}', 'ⁿ': '^{n}', '₊': '_{+}', '₋': '_{-}',
+};
+
+/** The characters set in text (OT1). */
+const UNICODE_TEXT = {
+  ' ': '~', 'ß': '\\ss{}', 'æ': '\\ae{}', 'Æ': '\\AE{}', 'œ': '\\oe{}', 'Œ': '\\OE{}', 'ø': '\\o{}', 'Ø': '\\O{}',
+  'ł': '\\l{}', 'Ł': '\\L{}', 'ı': '\\i{}', 'å': '\\aa{}', 'Å': '\\AA{}', '¿': '?`', '¡': '!`', '§': '\\S{}', '¶': '\\P{}',
+  '©': '\\copyright{}', '£': '\\pounds{}', 'ª': '\\textsuperscript{a}', 'º': '\\textsuperscript{o}',
+  '–': '--', '—': '---', '‘': '`', '’': "'", '‚': ',', '“': '``', '”': "''", '„': ',,', '…': '\\ldots{}',
+  '€': '\\texteuro{}', '•': '\\textbullet{}', '†': '\\dag{}', '‡': '\\ddag{}', '‹': '\\ensuremath{<}', '›': '\\ensuremath{>}',
+};
+
+GREEK.forEach((name, i) => {
+  UNICODE_MATH[String.fromCodePoint(0x3b1 + i)] = name.length > 1 ? `\\${name}` : name;
+  const up = GREEK_UPPER[i];
+  // a capital that looks Latin is the Latin letter (\mathrm stops listings in a comment)
+  if (up.length > 1) UNICODE_MATH[String.fromCodePoint(0x391 + i)] = `\\${up}`;
+  else if (up !== '-') UNICODE_TEXT[String.fromCodePoint(0x391 + i)] = up;
+});
+for (let d = 0; d < 10; d++) {
+  UNICODE_MATH[String.fromCodePoint(0x2080 + d)] = `_{${d}}`;
+  if (d === 0 || d > 3) UNICODE_MATH[String.fromCodePoint(0x2070 + d)] = `^{${d}}`;
+}
+
+/** The accents of OT1, by combining mark (NFD). */
+const ACCENTS = {
+  '̀': '`', '́': "'", '̂': '^', '̃': '~', '̄': '=', '̆': 'u', '̇': '.',
+  '̈': '"', '̊': 'r', '̋': 'H', '̌': 'v', '̧': 'c',
+};
+
+function hex(ch) {
+  return ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+}
+
+/** A character beyond ASCII in LaTeX, written in ASCII : text, mathematics, an accented letter, or its code. */
+export function latexOfChar(ch) {
+  if (UNICODE_TEXT[ch] !== undefined) return UNICODE_TEXT[ch];
+  if (UNICODE_MATH[ch] !== undefined) return `\\ensuremath{${UNICODE_MATH[ch]}}`;
+  const [base, ...marks] = [...ch.normalize('NFD')];
+  if (marks.length && /^[A-Za-z]$/.test(base)) {
+    // an accent OT1 lacks (ogonek…) : the letter alone
+    return marks.reduce((acc, m) => (ACCENTS[m] ? `\\${ACCENTS[m]}{${acc}}` : acc), base === 'i' || base === 'j' ? `\\${base}` : base);
+  }
+  return `{\\ttfamily[U+${hex(ch)}]}`;
+}
+
+/** The characters beyond ASCII of the document given to listings and to inputenc. */
+export function declareUnicode(tex) {
+  const chars = [...new Set([...tex].filter((ch) => ch.codePointAt(0) > 0x7f))].sort();
+  if (!chars.length) return tex;
+  // columns=flexible drops the space after a replacement of `literate` : keepspaces
+  let out = tex.replace(/(\n\s*columns=flexible,)/, '$1 keepspaces=true,');
+  const lit = out.match(/(literate=[\s\S]*?)(,\s*\n\s*emph=)/);
+  if (lit) {
+    const known = new Set([...lit[1].matchAll(/\{([^{}])\}\{/gu)].map((m) => m[1]));
+    // \l draws its bar with the character 32 of the font : a visible space in typewriter
+    const listed = (ch) => ({ 'ł': 'l', 'Ł': 'L' })[ch] ?? latexOfChar(ch);
+    const entries = chars.filter((ch) => !known.has(ch)).map((ch) => `{${ch}}{{${listed(ch)}}}1`);
+    if (entries.length) out = out.replace(lit[0], () => `${lit[1]}\n\t\t\t${entries.join(' ')}${lit[2]}`);
+  }
+  const declared = chars.map((ch) => `\\DeclareUnicodeCharacter{${hex(ch)}}{${latexOfChar(ch)}}`);
+  return out.replace(/\n\\begin\{document\}/, (m) => `\n% faustcode : the characters beyond ASCII\n${declared.join('\n')}\n${m}`);
 }
 
 /** The SVG the document includes, as paths in the doc directory (`svg/svg-01/process.svg`). */

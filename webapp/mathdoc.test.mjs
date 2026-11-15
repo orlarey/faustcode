@@ -6,11 +6,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   MATHDOC_RESOURCE_FILES,
+  declareUnicode,
   fixMathdocTex,
   hasMdocTag,
   includedSvgs,
   installMathdocResources,
   latexEscape,
+  latexOfChar,
   mathdocName,
   packMathdoc,
   runMathdoc,
@@ -76,6 +78,29 @@ test('fixMathdocTex : the head of the autodoc', () => {
   assert.ok(out.includes('\\textbf{name} & my\\_synth \\\\  \\hline  \\end{tabular} \\bigskip'));
   // with <mdoc> tags, the title and the tables are the LaTeX of the user
   assert.equal(fixMathdocTex(AUTODOC_HEAD), AUTODOC_HEAD);
+});
+
+test('latexOfChar : text, mathematics, accents, or the code ; always ASCII', () => {
+  const cases = {
+    'é': "\\'{e}", 'Ü': '\\"{U}', 'ç': '\\c{c}', 'ő': '\\H{o}', 'ï': '\\"{\\i}', 'ą': 'a', 'ß': '\\ss{}', 'Œ': '\\OE{}',
+    '—': '---', '’': "'", '€': '\\texteuro{}', '«': '\\ensuremath{\\ll}', 'π': '\\ensuremath{\\pi}', 'Δ': '\\ensuremath{\\Delta}',
+    'Μ': 'M', '≤': '\\ensuremath{\\leq}', '²': '\\ensuremath{^{2}}', '₀': '\\ensuremath{_{0}}', '🎵': '{\\ttfamily[U+1F3B5]}',
+  };
+  for (const [ch, latex] of Object.entries(cases)) assert.equal(latexOfChar(ch), latex, ch);
+  for (let c = 0xa0; c < 0x2200; c++) assert.match(latexOfChar(String.fromCodePoint(c)), /^[\x20-\x7e]+$/);
+});
+
+test('declareUnicode : literate in ASCII for listings, \\DeclareUnicodeCharacter for the text', () => {
+  const tex = '\\usepackage[utf8]{inputenc}\n\\lstset{%\n  columns=flexible, %fixed, \n  literate=\t{é}{{\\\'e}}1 \n\t\t\t{Ç}{{\\c{C}}}1,\n  emph={x}\n}\n\n\\begin{document}\n// é π ł 🎵\n';
+  const out = declareUnicode(tex);
+  assert.match(out, /columns=flexible, keepspaces=true,/);
+  // the entries of Faust kept, é not twice, each other character replaced by ASCII
+  assert.match(out, /\{Ç\}\{\{\\c\{C\}\}\}1\n\t\t\t\{ł\}\{\{l\}\}1 \{π\}\{\{\\ensuremath\{\\pi\}\}\}1 \{🎵\}\{\{\{\\ttfamily\[U\+1F3B5\]\}\}\}1,\n  emph=/);
+  assert.equal(out.match(/\{é\}\{/g).length, 1);
+  assert.match(out, /\\DeclareUnicodeCharacter\{00E9\}\{\\'\{e\}\}\n/);
+  assert.match(out, /\\DeclareUnicodeCharacter\{0142\}\{\\l\{\}\}\n/);
+  assert.match(out, /\\DeclareUnicodeCharacter\{1F3B5\}\{\{\\ttfamily\[U\+1F3B5\]\}\}\n\n\\begin\{document\}/);
+  assert.equal(declareUnicode('\\begin{document}\nascii\n'), '\\begin{document}\nascii\n');
 });
 
 test('includedSvgs', () => {
@@ -185,6 +210,9 @@ test('runMathdoc : the autodoc of a program, in French, with a library of faustc
   assert.match(tex, /\\textsf\{"freq\\_hz"\} \\ \(\\%\) & \$/);
   assert.doesNotMatch(tex.slice(0, tex.indexOf('\\begin{lstlisting}[caption')), /\\textbf\{[^}]*[^\\]_/);
   assert.deepEqual(includedSvgs(tex), ['svg/svg-01/process.svg']);
+  // the comments of maths.lib have π : listings gets it in ASCII
+  assert.match(tex, /\{π\}\{\{\\ensuremath\{\\pi\}\}\}1/);
+  assert.match(tex, /\\DeclareUnicodeCharacter\{03C0\}/);
   // nothing left in the filesystem of libfaust
   assert.ok(!fs.readdir('/').some((f) => /^my-synth/.test(f)));
 });
