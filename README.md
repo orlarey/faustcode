@@ -90,7 +90,17 @@ don't have to fight Chrome's ES module cache while iterating.
   - **Apps** : install as an app on this computer ; open in faustmodular
     (the faustmodular button of the header does it too) ;
   - **Files** : `.dsp`, the diagrams, the math documentation, the PWA ;
-  - **Publish** : to a store.
+  - **Publish** : to a store, the module ; or **as an app** (0.24.0) :
+    the PWA compiled at the voices of the panel, committed with a
+    `.nojekyll` to `apps/<name>/` of the store, and served by GitHub Pages
+    at `https://<owner>.github.io/<store>/apps/<name>/`. Enable GitHub
+    Pages on the store once (Settings ▸ Pages ▸ Deploy from a branch ▸
+    `main` ▸ `/ (root)` ; the repository public) ; faustcode waits for
+    the deployment (30 s to 1 min) by reading the fingerprint of the
+    manifest served, then Audience offers this short link : its QR code
+    opens the app at once, without faustcode. The index of the store
+    ignores `apps/`. Installed apps update after being closed and opened
+    again (the service worker of faustwasm does not `skipWaiting`).
 
   File only writes : new, open, save, versions, stores to open from. A
   `.lib`, or a code that does not compile, greys what does not apply, and

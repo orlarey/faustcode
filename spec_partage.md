@@ -198,7 +198,7 @@ Prises le 15 novembre 2026 : la 3 par Yann Orlarey ; la 1 et la 2 selon la propo
 - `share-ui.js` : le dialogue devient un panneau à onglets ; `buildQr`, la projection et la copie inchangés ; le sélecteur de voix et le bandeau de brouillon en tête.
 - `play.html`, `play.js` : la page player ; `share-link.js` lui fournit le décodage des liens (`decodeShareParams`) et la construction de son adresse (`buildPlayUrl`).
 - `pwa-export.js` : l'empreinte du code et des voix dans le manifeste de l'application, pour reconnaître une application déjà installée.
-- `stores-ui.js` : *Publish ▸ As an app* — les fichiers de `pwaEntries` dans le même commit que le module ; la disponibilité du lien (une requête `HEAD` sur l'adresse Pages).
+- `app-publish.js` : *Publish ▸ As an app* — les fichiers de `pwaEntries` (empreinte dans le manifeste) à `apps/<nom>/` avec `.nojekyll`, en un commit par `Publishing.publish` de fauststore ; l'adresse de Pages (API `/pages`, sinon `owner.github.io/repo/`) ; la disponibilité en lisant l'empreinte du `manifest.json` servi (Pages répond avec `Access-Control-Allow-Origin: *`) ; les applications publiées depuis ce navigateur retenues par empreinte, pour qu'Audience propose leur lien.
 - `pwa-export.js`, `mathdoc-export.js`, `stores-ui.js` : réutilisés tels quels depuis le panneau.
 - `app.js` : retrait des entrées du menu File, des Download et du bouton *pwa* ; le bouton *Share* ouvre le panneau sur le dernier onglet.
 - MCP : un outil `get_share_link` (lien, `play` ou `dsp`, voix) rendrait le partage scriptable ; à prévoir dans `tools.json` et `MCP-SPEC.md`.

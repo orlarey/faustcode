@@ -83,14 +83,16 @@ in the browser. It then runs offline.
  *           effectJson?: string|null, mixerModule?: Uint8Array|null }, readme?: string }} options
  *   templates : by their name in vendor/faust-pwa/
  */
-export function pwaEntries({ name, voices = 0, version, templates, faustwasm, dsp, readme = '' }) {
+export function pwaEntries({ name, voices = 0, version, templates, faustwasm, dsp, readme = '', fingerprint = '' }) {
   const root = `${name}-pwa`;
   const hasEffect = voices > 0 && !!(dsp.effectModule && dsp.effectJson);
   const entries = [{ path: `${root}/` }, { path: `${root}/faust-ui/` }, { path: `${root}/faustwasm/` }];
   for (const [path, source] of Object.entries(PWA_TEMPLATES)) {
     const data = templates[source];
     if (data === undefined) throw new Error(`pwa : the template ${source} is missing`);
-    entries.push({ path: `${root}/${path}`, data: FILLED.has(path) ? fillTemplate(data, { name, version, voices, hasEffect }) : data });
+    let filled = FILLED.has(path) ? fillTemplate(data, { name, version, voices, hasEffect }) : data;
+    if (path === 'manifest.json' && fingerprint) filled = withFingerprint(filled, fingerprint);
+    entries.push({ path: `${root}/${path}`, data: filled });
   }
   entries.push({ path: `${root}/faustwasm/index.js`, data: faustwasm });
   entries.push({ path: `${root}/dsp-module.wasm`, data: dsp.module });
@@ -173,10 +175,15 @@ function withoutServiceWorker(js) {
 }
 
 /** The manifest with its id and scope : each app of the origin is its own app. */
-function appManifest(json, fingerprint) {
+/** The manifest with the fingerprint of the app : `faustcode`, a member browsers ignore (play.html, Share read it). */
+function withFingerprint(json, fingerprint) {
   const manifest = JSON.parse(json);
-  // `faustcode` : a member browsers ignore ; play.html reads it to know the app is there
-  return JSON.stringify({ id: './', scope: './', ...manifest, ...(fingerprint ? { faustcode: { fingerprint } } : {}) }, null, 2);
+  return JSON.stringify({ ...manifest, faustcode: { fingerprint } }, null, 2);
+}
+
+function appManifest(json) {
+  const manifest = JSON.parse(json);
+  return JSON.stringify({ id: './', scope: './', ...manifest }, null, 2);
 }
 
 /**
@@ -250,7 +257,7 @@ export function appFiles(options) {
     if (path === 'service-worker.js') continue;
     let { data } = entry;
     if (path === 'faust-pwa.js') data = withoutServiceWorker(data);
-    else if (path === 'manifest.json') data = appManifest(data, options.fingerprint);
+    else if (path === 'manifest.json') data = appManifest(data);
     else if (path === 'index.html') data = withInstallButton(data.replace('<title>Faust DSP</title>', `<title>${options.name}</title>`), options.name);
     files.push({ path, data, type: contentType(path) });
   }
@@ -303,7 +310,7 @@ function downloadBytes(filename, bytes) {
  * default those of faustcode (files.js), none on play.html.
  * onProgress('compiler' | 'compiled' | 'installing') : where it is.
  */
-async function buildPwa({ code, filename, voices = 0, appVersion = '', libraries, onProgress = () => {} }) {
+export async function buildPwaOptions({ code, filename, voices = 0, appVersion = '', libraries, onProgress = () => {} }) {
   const [{ getFaust }, { injectLibsIntoFs, LIB_INCLUDE_ARG }] = await Promise.all([import('./faust.js'), import('./lib-inject.js')]);
   const libs = libraries ?? (await import('./files.js')).libSessionsForCompile();
   const [faust, loaded] = await Promise.all([getFaust(), loadTemplates()]);
@@ -336,7 +343,7 @@ async function buildPwa({ code, filename, voices = 0, appVersion = '', libraries
  * @returns {Promise<{ filename: string, voices: number, hasEffect: boolean }>}
  */
 export async function exportPwa(options) {
-  const { options: built } = await buildPwa(options);
+  const { options: built } = await buildPwaOptions(options);
   const pack = await packPwa(built);
   downloadBytes(pack.filename, pack.bytes);
   return { filename: pack.filename, voices: built.voices, hasEffect: pack.hasEffect };
@@ -377,7 +384,7 @@ export async function installPwaApp(options) {
   if (!('serviceWorker' in navigator) || typeof caches === 'undefined') {
     throw new Error('this browser has no service worker here : download the pwa (.zip)');
   }
-  const { options: built, hasEffect } = await buildPwa(options);
+  const { options: built, hasEffect } = await buildPwaOptions(options);
   if (options.onProgress) options.onProgress('installing');
   built.fingerprint = await appFingerprint(options.code, built.voices);
   const scope = new URL('./apps/', import.meta.url);

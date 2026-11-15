@@ -125,7 +125,9 @@ function el(tag, attrs = {}, ...children) {
  * @param {string|null} [ctx.storeName]
  * @param {string[]} [ctx.writableStores]
  * @param {object} ctx.actions         installApp(voices), openInModular(), downloadDsp(), downloadDiagrams(),
- *                                     downloadMathdoc(lang), downloadPwa(voices), publish(store), openStores()
+ *                                     downloadMathdoc(lang), downloadPwa(voices), publish(store), openStores(),
+ *                                     publishApp(store, voices, onStatus) → { url, live, pages, settings },
+ *                                     appFor(voices) → the address of the published app of this code, or null
  */
 export async function openSharePanel(ctx) {
   closeShareDialog();
@@ -136,6 +138,7 @@ export async function openSharePanel(ctx) {
     voices: SHARE_VOICES.includes(Number(ctx.voices)) ? Number(ctx.voices) : 0,
     opens: can.play ? 'edit' : 'play',
     source: ctx.storeUrl ? 'store' : 'code',
+    appUrl: null, // the published app of this code at these voices
     url: '',
     qr: null,
   };
@@ -178,7 +181,9 @@ export async function openSharePanel(ctx) {
     return { box, buttons };
   };
   const opensSeg = seg('Opens', [['play', 'Play'], ['edit', 'Edit']]);
-  const sourceSeg = seg('Link', [['code', 'With the code'], ['store', 'From the store']]);
+  const sourceSeg = seg('Link', [['code', 'With the code'], ['store', 'From the store'], ['app', 'Published app']]);
+  if (!ctx.storeUrl) sourceSeg.buttons.store.hidden = true;
+  const sourceRow = el('div', { class: 'share-row' }, el('span', { class: 'share-row-label', text: 'Link' }), sourceSeg.box);
   const opensText = el('span', { class: 'share-note' });
   const metaEl = el('div', { class: 'share-meta' });
   const warnEl = el('div', { class: 'share-warning hidden' });
@@ -189,7 +194,7 @@ export async function openSharePanel(ctx) {
     qrEl,
     el('div', { class: 'share-audience-side' },
       el('div', { class: 'share-row' }, el('span', { class: 'share-row-label', text: 'Opens' }), opensSeg.box, opensText),
-      ctx.storeUrl ? el('div', { class: 'share-row' }, el('span', { class: 'share-row-label', text: 'Link' }), sourceSeg.box) : null,
+      sourceRow,
       metaEl, warnEl, urlEl,
       el('div', { class: 'share-actions' }, projectBtn, copyBtn)));
 
@@ -239,13 +244,69 @@ export async function openSharePanel(ctx) {
 
   // ---- Publish
   const stores = ctx.writableStores || [];
+  const unsavedReason = ctx.unsaved ? 'Save your changes first : the saved version is published.' : null;
+  const appCard = (store) => {
+    const reason = can.pwa || unsavedReason;
+    const statusEl = el('div', { class: 'share-card-status', 'aria-live': 'polite' });
+    const descEl = el('div', { class: 'share-card-desc' });
+    const b = el('button', { type: 'button', class: 'primary-btn share-go', text: 'Publish app', disabled: !!reason });
+    const row = el('div', { class: 'share-card-row share-app-row' + (reason ? ' is-disabled' : '') },
+      el('div', { class: 'share-card-text' }, el('div', { class: 'share-card-title', text: `Publish as an app to ${store}` }), descEl, statusEl), b);
+    const describe = () => {
+      descEl.textContent = reason || `The app compiled, ${voicesLabel(st.voices)}, at apps/ of the store, served by GitHub Pages about a minute later : its QR code opens the app at once, without faustcode.`;
+    };
+    appDescribers.push(describe);
+    describe();
+    if (!reason) {
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        statusEl.classList.remove('error');
+        const say = {
+          compiling: () => 'Compiling…',
+          publishing: () => `Publishing to ${store}…`,
+          deploying: (sec) => `Published. Waiting for GitHub Pages… ${sec ? `(${sec} s)` : ''}`,
+          live: () => 'Live.',
+        };
+        try {
+          const result = await actions.publishApp(store, st.voices, (stage, detail) => {
+            statusEl.textContent = say[stage] ? say[stage](detail) : stage;
+          });
+          statusEl.replaceChildren();
+          if (result.pages === 'disabled') {
+            statusEl.classList.add('error');
+            statusEl.append('Published, but GitHub Pages is not enabled on this store : ',
+              el('a', { href: result.settings, target: '_blank', rel: 'noopener', text: 'enable it' }),
+              ' (Deploy from a branch ▸ main ▸ / (root)). The app will then be at ',
+              el('a', { href: result.url, target: '_blank', rel: 'noopener', text: result.url }), '.');
+          } else if (!result.live) {
+            statusEl.append('Published ; GitHub Pages does not serve it yet (it can take a few minutes) : ',
+              el('a', { href: result.url, target: '_blank', rel: 'noopener', text: result.url }), '.');
+          } else {
+            statusEl.append('Live at ', el('a', { href: result.url, target: '_blank', rel: 'noopener', text: result.url }), ' : Audience shows its QR code.');
+          }
+          st.appUrl = result.url;
+          st.opens = 'play';
+          st.source = 'app';
+          await refreshLink();
+          if (result.live) showTab('audience');
+        } catch (err) {
+          statusEl.classList.add('error');
+          statusEl.textContent = err && err.message ? err.message : String(err);
+        } finally {
+          b.disabled = false;
+        }
+      });
+    }
+    return row;
+  };
+  const appDescribers = [];
   const publishRows = stores.length
-    ? stores.map((store) => card(`Publish to ${store}`,
+    ? stores.flatMap((store) => [card(`Publish ${ctx.filename} to ${store}`,
       'The saved version, as a module of the store, in one commit. Its short link is copied, and Audience then offers it : a QR code readable from the back of the room.',
       'Publish', () => {
         closeShareDialog();
         void actions.publish(store);
-      }, can.publish, true))
+      }, can.publish, true), appCard(store)])
     : [card('No store to write to', 'Follow a store and give its token (File ▸ Stores…, a click on its badge read) : then publish here.', 'Stores…', () => {
       closeShareDialog();
       void actions.openStores();
@@ -276,11 +337,17 @@ export async function openSharePanel(ctx) {
       b.classList.toggle('active', v === st.opens);
       b.disabled = v === 'play' && !!can.play;
     }
+    sourceSeg.buttons.app.hidden = !st.appUrl;
+    sourceSeg.buttons.app.disabled = st.opens !== 'play';
+    sourceRow.hidden = !ctx.storeUrl && !st.appUrl;
+    if (st.source === 'app' && (!st.appUrl || st.opens !== 'play')) st.source = ctx.storeUrl ? 'store' : 'code';
     for (const [v, b] of Object.entries(sourceSeg.buttons)) b.classList.toggle('active', v === st.source);
     opensText.textContent = st.opens === 'play' ? `the app itself, ready to install (${voicesLabel(st.voices)})` : 'faustcode, on the code';
     let url;
     const play = st.opens === 'play';
-    if (st.source === 'store' && ctx.storeUrl) {
+    if (st.source === 'app' && st.appUrl) {
+      url = st.appUrl;
+    } else if (st.source === 'store' && ctx.storeUrl) {
       if (play) url = playUrlOf(ctx.storeUrl, st.voices);
       else {
         const u = new URL(ctx.storeUrl);
@@ -298,7 +365,11 @@ export async function openSharePanel(ctx) {
     st.url = url;
     st.qr = buildQr(url);
     urlEl.value = url;
-    metaEl.textContent = `${ctx.filename} · ${url.length} characters${st.source === 'store' && ctx.storeUrl ? ` · from the store ${ctx.storeName || ''}` : ' · the code is in the link'}`;
+    metaEl.textContent = `${ctx.filename} · ${url.length} characters · ${{
+      app: 'the published app : it opens at once',
+      store: `from the store ${ctx.storeName || ''}${play ? ' : the phone builds the app, a few seconds the first time' : ''}`,
+      code: play ? 'the code is in the link : the phone builds the app, a few seconds the first time' : 'the code is in the link',
+    }[st.source]}`;
     warnEl.classList.add('hidden');
     if (st.qr) {
       qrEl.hidden = false;
@@ -333,9 +404,14 @@ export async function openSharePanel(ctx) {
     st.source = b.dataset.value;
     void refreshLink();
   });
-  voicesSelect.addEventListener('change', () => {
+  const findApp = async () => {
+    st.appUrl = actions.appFor ? await actions.appFor(st.voices) : null;
+  };
+  voicesSelect.addEventListener('change', async () => {
     st.voices = Number(voicesSelect.value) || 0;
     refreshVoices();
+    for (const d of appDescribers) d();
+    await findApp();
     void refreshLink();
   });
   copyBtn.addEventListener('click', async () => {
@@ -357,6 +433,12 @@ export async function openSharePanel(ctx) {
 
   showTab(st.tab);
   refreshVoices();
+  await findApp();
+  // the best link there is : the published app, then the store, then the code
+  if (st.appUrl && !can.play) {
+    st.opens = 'play';
+    st.source = 'app';
+  }
   await refreshLink();
   openPanel = { backdrop, onKey };
   document.body.appendChild(backdrop);

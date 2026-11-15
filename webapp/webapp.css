@@ -618,6 +618,26 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
   line-height: 1.4;
 }
 
+.share-card-status {
+  font-size: 0.76rem;
+  color: var(--ui-text-value);
+  margin-top: 0.35rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.share-card-status:empty {
+  display: none;
+}
+
+.share-card-status.error {
+  color: #ffb35a;
+}
+
+.share-card-status a {
+  color: #9ff5d2;
+}
+
 .share-card-row.is-disabled .share-card-title,
 .share-file-row.is-disabled .share-file-name {
   opacity: 0.5;

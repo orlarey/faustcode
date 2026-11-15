@@ -31,7 +31,8 @@ import * as files from './files.js';
 import * as disk from './disk-files.js';
 import * as storesUi from './stores-ui.js';
 import { exportMathdoc } from './mathdoc-export.js';
-import { exportPwa, installPwaApp } from './pwa-export.js';
+import { appFingerprint, exportPwa, installPwaApp } from './pwa-export.js';
+import { publishApp, publishedAppFor } from './app-publish.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -1648,6 +1649,20 @@ async function openShare() {
         showNotice(`${result.filename} downloaded (${mode}) : its README.txt tells how to serve it.`, 8000);
       }, true),
       publish: (store) => publishOpenFile(store),
+      // Share ▸ Publish ▸ As an app : the PWA at apps/ of the store, served by GitHub Pages
+      publishApp: async (store, voices, onStatus) => {
+        if (getDraft(sha) !== null) throw new Error('Save your changes first : the saved version is published.');
+        try {
+          return await publishApp({ publishing: storesUi.publishing, store, code, filename, voices, onStatus });
+        } catch (err) {
+          throw err && err.reason ? new Error(storesUi.publishErrorText(err, store)) : err;
+        }
+      },
+      // the app published from this browser for this code at these voices
+      appFor: async (voices) => {
+        const record = publishedAppFor(await appFingerprint(code, voices));
+        return record ? record.url : null;
+      },
       openStores: () => storesUi.openStoresPanel({ open: showStoreModules }),
     },
   });
