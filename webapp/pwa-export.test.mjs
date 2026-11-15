@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PWA_TEMPLATES, compilePwaDsp, fillTemplate, packPwa, pwaEntries, pwaName, pwaReadme, versionDate } from './pwa-export.js';
+import { PWA_TEMPLATES, appFiles, compilePwaDsp, contentType, fillTemplate, packPwa, pwaEntries, pwaName, pwaReadme, versionDate } from './pwa-export.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
@@ -108,4 +108,32 @@ test('a polyphonic PWA with its effect : the voices of the run view, the mixer, 
 test('a code that does not compile : the error of Faust', async () => {
   const f = await faust();
   await assert.rejects(compilePwaDsp(f, { code: 'process = foo;', name: 'Bad', voices: 0, args: '-ftz 2' }), /foo/);
+});
+
+test('contentType : what apps/sw.js serves', () => {
+  assert.equal(contentType('dsp-module.wasm'), 'application/wasm');
+  assert.equal(contentType('faust-ui/index.js'), 'text/javascript; charset=utf-8');
+  assert.equal(contentType('index.html'), 'text/html; charset=utf-8');
+  assert.equal(contentType('manifest.json'), 'application/json; charset=utf-8');
+  assert.equal(contentType('icon.png'), 'image/png');
+  assert.equal(contentType('x.bin'), 'application/octet-stream');
+});
+
+test('appFiles : the PWA served by apps/sw.js — no service worker of its own, id and scope, a button Install', async () => {
+  const f = await faust();
+  const dsp = await compilePwaDsp(f, { code: 'process = os.osc(440) * 0.1; import("stdfaust.lib");', name: 'Osc', voices: 0, args: '-ftz 2' });
+  const files = appFiles({ name: 'Osc', version: 'v', templates: templates(), faustwasm: '/* faustwasm */', dsp, readme: 'x' });
+  const paths = files.map((x) => x.path).sort();
+  assert.deepEqual(paths, ['create-node.js', 'dsp-meta.json', 'dsp-module.wasm', 'faust-pwa.js', 'faust-ui/index.css', 'faust-ui/index.js', 'faustwasm/index.js', 'icon.png', 'index.html', 'index.js', 'manifest.json']);
+  const by = Object.fromEntries(files.map((x) => [x.path, x]));
+  assert.equal(by['dsp-module.wasm'].type, 'application/wasm');
+  const manifest = JSON.parse(by['manifest.json'].data);
+  assert.equal(manifest.id, './');
+  assert.equal(manifest.scope, './');
+  assert.equal(manifest.start_url, './index.html');
+  assert.equal(manifest.short_name, 'Osc');
+  assert.match(by['faust-pwa.js'].data, /if \(false \/\* faustcode : apps\/sw\.js serves this app \*\/ && "serviceWorker" in navigator\)/);
+  assert.match(by['index.html'].data, /<button id="faustcode-install-button" type="button"[^>]*>Install Osc<\/button>[\s\S]*beforeinstallprompt[\s\S]*<\/script>\n<\/body>/);
+  assert.match(by['index.html'].data, /<link rel="manifest" href="\.\/manifest\.json">/);
+  assert.match(by['index.html'].data, /<title>Osc<\/title>/);
 });

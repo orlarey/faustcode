@@ -1,6 +1,10 @@
-// pwa-export.js — Run ▸ Download ▸ pwa : the program as a Progressive Web
-// App, what `faust2wasm <file.dsp> <dir> -pwa [-poly]` of faustwasm makes,
-// made in the page and downloaded as `<name>-pwa.zip`.
+// pwa-export.js — the program as a Progressive Web App, what
+// `faust2wasm <file.dsp> <dir> -pwa [-poly]` of faustwasm makes, made in the
+// page. Run ▸ Download :
+//   - pwa (.zip) : downloaded as `<name>-pwa.zip`, to serve anywhere ;
+//   - app (install…) : installed at once as an app of this origin, at
+//     apps/<name>/, served from the cache by apps/sw.js ; its window opens
+//     and offers to install it (installPwaApp).
 //
 // The DSP is compiled as the run view compiles it (`-ftz 2`, the .lib files
 // of faustcode through -I, mono or poly at the voices of the view) ; the
@@ -144,6 +148,105 @@ export async function packPwa(options) {
 }
 
 // ---------------------------------------------------------------------
+// An app installed by faustcode (Run ▸ app) : served by apps/sw.js
+// ---------------------------------------------------------------------
+
+/** The cache apps/sw.js serves the apps from. */
+export const APPS_CACHE = 'faustcode-apps';
+
+const TYPES = {
+  html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8',
+  json: 'application/json; charset=utf-8', wasm: 'application/wasm', png: 'image/png', txt: 'text/plain; charset=utf-8',
+};
+
+/** The Content-Type of a file of an app (application/wasm : compileStreaming wants it). */
+export function contentType(path) {
+  return TYPES[(String(path).match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase()] || 'application/octet-stream';
+}
+
+const SW_REGISTRATION = 'if ("serviceWorker" in navigator) {';
+
+/** faust-pwa.js without the registration of its service worker : apps/sw.js serves the app. */
+function withoutServiceWorker(js) {
+  if (!js.includes(SW_REGISTRATION)) throw new Error('pwa : faust-pwa.js has no registration of its service worker');
+  return js.replace(SW_REGISTRATION, 'if (false /* faustcode : apps/sw.js serves this app */ && "serviceWorker" in navigator) {');
+}
+
+/** The manifest with its id and scope : each app of the origin is its own app. */
+function appManifest(json) {
+  const manifest = JSON.parse(json);
+  return JSON.stringify({ id: './', scope: './', ...manifest }, null, 2);
+}
+
+/** index.html with a button that installs the app (beforeinstallprompt : Chrome, Edge), or how to (Safari). */
+function withInstallButton(html, name) {
+  if (!html.includes('</body>')) throw new Error('pwa : index.html has no </body>');
+  const box = `
+    <div id="faustcode-install" hidden style="position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:10;display:flex;gap:10px;align-items:center;padding:8px 12px;border-radius:8px;background:#2b2b2b;color:#ddd;font:14px system-ui,sans-serif;box-shadow:0 2px 10px #0008">
+        <button id="faustcode-install-button" type="button" style="font:inherit;padding:6px 12px;border:0;border-radius:6px;background:#e8a33d;color:#1f1f1f;cursor:pointer">Install ${name}</button>
+        <span id="faustcode-install-text"></span>
+    </div>
+    <script>
+        // faustcode : install this app (Run ▸ app)
+        (() => {
+            const box = document.getElementById("faustcode-install");
+            const text = document.getElementById("faustcode-install-text");
+            const button = document.getElementById("faustcode-install-button");
+            if (matchMedia("(display-mode: standalone)").matches || navigator.standalone) return;
+            let prompt = null;
+            addEventListener("beforeinstallprompt", (e) => {
+                e.preventDefault();
+                prompt = e;
+                box.hidden = false;
+            });
+            addEventListener("appinstalled", () => { box.hidden = true; });
+            button.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (!prompt) return;
+                prompt.prompt();
+                await prompt.userChoice;
+                prompt = null;
+                box.hidden = true;
+            });
+            // Safari has no prompt : its menu installs
+            if (/^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent)) {
+                button.hidden = true;
+                text.textContent = /iphone|ipad/i.test(navigator.userAgent)
+                    ? "To install it : Share, then Add to Home Screen"
+                    : "To install it : File, then Add to Dock";
+                box.hidden = false;
+            }
+        })();
+    </script>
+`;
+  return html.replace('</body>', `${box}</body>`);
+}
+
+/**
+ * The files of an app installed by faustcode : those of the PWA (pwaEntries),
+ * paths relative to apps/<name>/, but no service-worker.js (apps/sw.js does
+ * its work ; faust-pwa.js does not register it), a manifest with its id and
+ * scope, a button Install in index.html.
+ *
+ * @returns {{ path: string, data: string|Uint8Array, type: string }[]}
+ */
+export function appFiles(options) {
+  const root = `${options.name}-pwa/`;
+  const files = [];
+  for (const entry of pwaEntries({ ...options, readme: '' })) {
+    if (entry.path.endsWith('/')) continue;
+    const path = entry.path.slice(root.length);
+    if (path === 'service-worker.js') continue;
+    let { data } = entry;
+    if (path === 'faust-pwa.js') data = withoutServiceWorker(data);
+    else if (path === 'manifest.json') data = appManifest(data);
+    else if (path === 'index.html') data = withInstallButton(data.replace('<title>Faust DSP</title>', `<title>${options.name}</title>`), options.name);
+    files.push({ path, data, type: contentType(path) });
+  }
+  return files;
+}
+
+// ---------------------------------------------------------------------
 // Browser
 // ---------------------------------------------------------------------
 
@@ -183,13 +286,8 @@ function downloadBytes(filename, bytes) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/**
- * Compiles the program, makes and downloads `<name>-pwa.zip`.
- *
- * @param {{ code: string, filename: string, voices?: number, appVersion?: string }} options
- * @returns {Promise<{ filename: string, voices: number, hasEffect: boolean }>}
- */
-export async function exportPwa({ code, filename, voices = 0, appVersion = '' }) {
+/** Compiles the program as the run view does ; the templates and faustwasm loaded. */
+async function buildPwa({ code, filename, voices = 0, appVersion = '' }) {
   const [{ getFaust }, { injectLibsIntoFs, LIB_INCLUDE_ARG }, { libSessionsForCompile }] = await Promise.all([
     import('./faust.js'),
     import('./lib-inject.js'),
@@ -202,15 +300,81 @@ export async function exportPwa({ code, filename, voices = 0, appVersion = '' })
   const dsp = await compilePwaDsp(faust, { code, name, voices: n, args: `-ftz 2 ${LIB_INCLUDE_ARG}` });
   const { faustwasm, ...templates } = loaded;
   const hasEffect = n > 0 && !!dsp.effectModule;
-  const pack = await packPwa({
-    name,
-    voices: n,
-    version: versionDate(),
-    templates,
-    faustwasm,
-    dsp,
-    readme: pwaReadme({ name, voices: n, hasEffect, appVersion, faustVersion: faust.version }),
-  });
+  return {
+    hasEffect,
+    options: {
+      name,
+      voices: n,
+      version: versionDate(),
+      templates,
+      faustwasm,
+      dsp,
+      readme: pwaReadme({ name, voices: n, hasEffect, appVersion, faustVersion: faust.version }),
+    },
+  };
+}
+
+/**
+ * Compiles the program, makes and downloads `<name>-pwa.zip`.
+ *
+ * @param {{ code: string, filename: string, voices?: number, appVersion?: string }} options
+ * @returns {Promise<{ filename: string, voices: number, hasEffect: boolean }>}
+ */
+export async function exportPwa(options) {
+  const { options: built } = await buildPwa(options);
+  const pack = await packPwa(built);
   downloadBytes(pack.filename, pack.bytes);
-  return { filename: pack.filename, voices: n, hasEffect: pack.hasEffect };
+  return { filename: pack.filename, voices: built.voices, hasEffect: pack.hasEffect };
+}
+
+/** The worker of apps/ registered and active (its scope is not the page of faustcode : no `ready`). */
+async function appsWorker(scope) {
+  const registration = await navigator.serviceWorker.register(new URL('sw.js', scope), { scope: scope.pathname });
+  if (registration.active) return;
+  const worker = registration.installing || registration.waiting;
+  if (!worker) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('the service worker of apps/ did not start')), 15000);
+    const check = () => {
+      if (worker.state === 'activated') {
+        clearTimeout(timer);
+        resolve();
+      } else if (worker.state === 'redundant') {
+        clearTimeout(timer);
+        reject(new Error('the service worker of apps/ was refused'));
+      }
+    };
+    worker.addEventListener('statechange', check);
+    check();
+  });
+}
+
+/**
+ * Compiles the program and installs it as an app of this origin, at
+ * apps/<name>/ : its files in the cache apps/sw.js serves them from (a former
+ * version of it removed). Opening that address offers to install it.
+ *
+ * @param {{ code: string, filename: string, voices?: number, appVersion?: string }} options
+ * @returns {Promise<{ url: string, name: string, voices: number, hasEffect: boolean }>}
+ */
+export async function installPwaApp(options) {
+  if (!('serviceWorker' in navigator) || typeof caches === 'undefined') {
+    throw new Error('this browser has no service worker here : download the pwa (.zip)');
+  }
+  const { options: built, hasEffect } = await buildPwa(options);
+  const scope = new URL('./apps/', import.meta.url);
+  await appsWorker(scope);
+  const appUrl = new URL(`${built.name}/`, scope);
+  const cache = await caches.open(APPS_CACHE);
+  for (const request of await cache.keys()) {
+    if (request.url.startsWith(appUrl.href)) await cache.delete(request);
+  }
+  await Promise.all(
+    appFiles(built).map((f) => cache.put(new URL(f.path, appUrl).href, new Response(f.data, { headers: { 'Content-Type': f.type } }))),
+  );
+  // the apps live in the storage of this origin : ask that it be kept
+  try {
+    if (navigator.storage && navigator.storage.persist) await navigator.storage.persist();
+  } catch { /* best effort */ }
+  return { url: appUrl.href, name: built.name, voices: built.voices, hasEffect };
 }

@@ -320,6 +320,7 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
         <div class="download-select-group toolbar-download-right">
           <button id="run-download-btn" class="download-select-btn" type="button">Download</button>
           <select id="run-download-format" class="download-select-value" aria-label="Run download format">
+            <option value="app">app (install…)</option>
             <option value="pwa">pwa (.zip)</option>
           </select>
         </div>
