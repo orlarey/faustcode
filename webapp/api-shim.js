@@ -37,6 +37,7 @@ import {
   storeSession,
 } from './sessions.js';
 import { getFaust } from './faust.js';
+import { makeZip } from './zip.js';
 import { injectLibsIntoFs, isLibFilename, LIB_INCLUDE_ARG } from './lib-inject.js';
 import { announceSubmit } from './playground-link.js';
 import { attachSubmission, libSessionsForCompile, normalizeSource, clearFiles } from './files.js';
@@ -350,7 +351,7 @@ function asAttachment(body, filename, type = 'application/octet-stream') {
   });
 }
 
-function handleDownload(sha, kind) {
+async function handleDownload(sha, kind) {
   const sess = getSession(sha);
   if (!sess) return notFound();
   const base = (sess.filename || 'session').replace(/\.dsp$/i, '') || 'session';
@@ -366,14 +367,16 @@ function handleDownload(sha, kind) {
         ? asAttachment(sess.tasksDot, `${base}.dsp.dot`, 'text/plain')
         : notFound();
     case 'svg': {
-      const files = sess.svg ? Object.keys(sess.svg) : [];
-      const main = files.find((f) => f === 'process.svg') || files[0];
-      return main
-        ? asAttachment(sess.svg[main], `${base}-${main}`, 'image/svg+xml')
-        : notFound();
+      // every diagram (process.svg and the nested ones it links to), in <base>-svg/
+      const files = sess.svg ? Object.keys(sess.svg).sort() : [];
+      if (!files.length) return notFound();
+      const zip = await makeZip([
+        { path: `${base}-svg/` },
+        ...files.map((f) => ({ path: `${base}-svg/${f}`, data: sess.svg[f] })),
+      ]);
+      return asAttachment(zip, `${base}-svg.zip`, 'application/zip');
     }
     case 'cpp':
-    case 'pwa':
       return notFound(`${kind} download is out of scope in faustcode`);
     default:
       return notFound();
@@ -433,7 +436,7 @@ async function handleVersion() {
 }
 
 function handleAppVersion() {
-  return ok({ version: '0.19.2' });
+  return ok({ version: '0.20.0' });
 }
 
 function handleFaustHelp() {

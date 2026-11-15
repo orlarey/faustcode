@@ -22,6 +22,8 @@ webapp/vendor/codemirror/cm6.js.map
 # --- Local browser scratch ----------------------------------------
 .playwright-mcp/
 *.png
+# the icon of the PWA made by the run view (pwa-export.js)
+!webapp/vendor/faust-pwa/icon.png
 
 # --- Local dev caches ---------------------------------------------
 node_modules/

@@ -71,7 +71,7 @@ export async function render(container, { sha, onDownload }) {
             <div class="download-select-group toolbar-download-right">
               <button class="download-select-btn svg-download-btn" type="button">Download</button>
               <select class="download-select-value svg-download-format" aria-label="Diagram download format">
-                <option value="svg">.svg (.tar.gz)</option>
+                <option value="svg">.svg (.zip)</option>
               </select>
             </div>
           </div>

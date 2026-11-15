@@ -32,6 +32,7 @@ import * as disk from './disk-files.js';
 import * as storesUi from './stores-ui.js';
 import { MATHDOC_LANGS } from './mathdoc.js';
 import { exportMathdoc } from './mathdoc-export.js';
+import { exportPwa } from './pwa-export.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -1572,10 +1573,22 @@ async function downloadCurrentViewArtifact(format = '') {
 
   if (state.currentView === 'svg') {
     url = `/api/${session.sha1}/download/svg`;
-    filename = `${base}-svg.tar.gz`;
+    filename = `${base}-svg.zip`;
   } else if (state.currentView === 'run') {
-    url = `/api/${session.sha1}/download/pwa`;
-    filename = `${base}-pwa.tar.gz`;
+    // the PWA of the code the run view plays, at its voices (pwa-export.js)
+    const response = await fetch(`/api/${session.sha1}/user_code.dsp`);
+    if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
+    const code = await response.text();
+    showLoading();
+    try {
+      const appVersion = headerAppVersion ? headerAppVersion.textContent.replace(/^v/, '') : '';
+      const result = await exportPwa({ code, filename: session.filename, voices: state.runGlobal.polyVoices || 0, appVersion });
+      const mode = result.voices > 0 ? `${result.voices} voices${result.hasEffect ? ' + effect' : ''}` : 'mono';
+      showNotice(`${result.filename} downloaded (${mode}) : its README.txt tells how to serve it.`, 8000);
+    } finally {
+      hideLoading();
+    }
+    return;
   }
 
   await downloadFromUrl(url, filename, 'Download failed');

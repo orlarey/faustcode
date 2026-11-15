@@ -96,6 +96,13 @@ don't have to fight Chrome's ES module cache while iterating.
   The document lists the program and the `.lib` files of faustcode, not
   the libraries of Faust (140 pages for `stdfaust.lib` ; they stay in
   `src/`) : `<listing dependencies="true"/>` in a `<mdoc>` lists them too.
+- **PWA** (0.20.0) : Download ▸ pwa (.zip) in the **run** view makes
+  `<name>-pwa.zip`, what `faust2wasm -pwa` of faustwasm makes, in the
+  page : the code the run view plays, compiled as it compiles it (mono, or
+  poly at its voices, with the `effect` of the code), and the templates of
+  faustwasm 0.20.1 (`webapp/vendor/faust-pwa/`). Serve the folder by HTTP
+  (`python3 -m http.server`) ; in HTTPS it installs and runs offline. The
+  **svg** view downloads every diagram in `<name>-svg.zip`.
 - Sessions hydrate from the browser's Origin Private File System on
   every load, so closing the tab doesn't lose your patches.
 
