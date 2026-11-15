@@ -76,3 +76,16 @@ test('QR : level M for short links, L above 1000 chars, none beyond capacity', a
   assert.ok(long.modules > short.modules);
   assert.equal(buildQr(url(3500)), null);
 });
+
+test('play links : play.html next to faustcode, the code, no view', async () => {
+  const { buildPlayUrl, playUrlOf, playPageUrl } = await import('./share-link.js');
+  assert.equal(playPageUrl('https://orlarey.github.io/faustcode/'), 'https://orlarey.github.io/faustcode/play.html');
+  assert.equal(playPageUrl('https://example.org/fc/index.html'), 'https://example.org/fc/play.html');
+  const url = await buildPlayUrl(new URL('http://localhost:8080/webapp/?token=x'), { code: CODE, name: 'organ', poly: 8 });
+  assert.ok(url.startsWith(PUBLIC_BASE_URL + 'play.html?code='), url);
+  assert.match(url, /&name=organ\.dsp&poly=8$/);
+  assert.ok(!/view=|token/.test(url));
+  const store = 'https://orlarey.github.io/faustcode/?file=https%3A%2F%2Fgithub.com%2Fo%2Fs%2Fblob%2Fabc%2Forgan.dsp&view=run';
+  assert.equal(playUrlOf(store, 4), 'https://orlarey.github.io/faustcode/play.html?file=https%3A%2F%2Fgithub.com%2Fo%2Fs%2Fblob%2Fabc%2Forgan.dsp&poly=4');
+  assert.equal(playUrlOf(store, 0), 'https://orlarey.github.io/faustcode/play.html?file=https%3A%2F%2Fgithub.com%2Fo%2Fs%2Fblob%2Fabc%2Forgan.dsp');
+});

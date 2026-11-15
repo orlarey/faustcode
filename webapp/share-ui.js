@@ -9,7 +9,7 @@
 // actions app.js gives it (openSharePanel).
 
 import qrcode from './vendor/qrcode-generator/qrcode.mjs';
-import { buildShareUrl } from './share-link.js';
+import { buildPlayUrl, buildShareUrl, playUrlOf } from './share-link.js';
 
 export const LONG_LINK_CHARS = 1000;
 const MIN_MODULE_PX = 4;
@@ -277,21 +277,22 @@ export async function openSharePanel(ctx) {
       b.disabled = v === 'play' && !!can.play;
     }
     for (const [v, b] of Object.entries(sourceSeg.buttons)) b.classList.toggle('active', v === st.source);
-    opensText.textContent = st.opens === 'play' ? `the module, to play (${voicesLabel(st.voices)})` : 'faustcode, on the code';
+    opensText.textContent = st.opens === 'play' ? `the app itself, ready to install (${voicesLabel(st.voices)})` : 'faustcode, on the code';
     let url;
+    const play = st.opens === 'play';
     if (st.source === 'store' && ctx.storeUrl) {
-      const u = new URL(ctx.storeUrl);
-      u.searchParams.set('view', st.opens === 'play' ? 'run' : 'dsp');
-      if (st.opens === 'play' && st.voices > 0) u.searchParams.set('poly', String(st.voices));
-      else u.searchParams.delete('poly');
-      url = u.toString();
+      if (play) url = playUrlOf(ctx.storeUrl, st.voices);
+      else {
+        const u = new URL(ctx.storeUrl);
+        u.searchParams.set('view', 'dsp');
+        u.searchParams.delete('poly');
+        url = u.toString();
+      }
+    } else if (play) {
+      // play.html : the app, built on the phone, then opened (never the editor)
+      url = await buildPlayUrl(location, { code: ctx.code, name: ctx.filename, poly: st.voices });
     } else {
-      url = await buildShareUrl(location, {
-        code: ctx.code,
-        name: ctx.filename,
-        view: st.opens === 'play' ? 'run' : 'dsp',
-        poly: st.opens === 'play' ? st.voices : 0,
-      });
+      url = await buildShareUrl(location, { code: ctx.code, name: ctx.filename, view: 'dsp' });
     }
     if (seq !== linkSeq) return;
     st.url = url;

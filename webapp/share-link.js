@@ -137,6 +137,29 @@ export async function buildShareUrl(loc, fields) {
   return `${shareBaseUrl(loc)}?${params.toString()}`;
 }
 
+/** The page player (play.html), next to the page of faustcode at `base`. */
+export function playPageUrl(base) {
+  return new URL('play.html', base).href;
+}
+
+/**
+ * The link that plays a module as an app (spec_partage.md, « La page
+ * player ») : play.html with the code, its name and voices.
+ */
+export async function buildPlayUrl(loc, { code, name, poly = 0 }) {
+  const params = await encodeShareParams({ code, name, view: '', poly });
+  return `${playPageUrl(shareBaseUrl(loc))}?${params.toString()}`;
+}
+
+/** The play link of a link of faustcode (?file=… of a store) : play.html, the same file, the voices. */
+export function playUrlOf(link, poly = 0) {
+  const url = new URL(link);
+  const play = new URL(playPageUrl(url.origin + url.pathname));
+  for (const [k, v] of url.searchParams) if (k !== 'view' && k !== 'poly') play.searchParams.set(k, v);
+  if (poly && SHARE_POLY.includes(Number(poly))) play.searchParams.set('poly', String(Number(poly)));
+  return play.href;
+}
+
 // ---------------------------------------------------------------------
 // Boot hand-off : boot.js decodes + submits the shared DSP before app.js
 // runs, app.js consumes the intent when the user enters.

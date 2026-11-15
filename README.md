@@ -81,7 +81,12 @@ don't have to fight Chrome's ES module cache while iterating.
   chosen once in the head of the panel :
   - **Audience** : a link and its QR code (Projection, Copy link), to play
     the module or to edit its code ; the link of the store for a module
-    published and unchanged ;
+    published and unchanged. *Play* opens `play.html` (0.23.0), never the
+    editor : it builds the app of the module on the phone (libfaust, a few
+    seconds the first time), installs it at `apps/<name>/` and opens it,
+    ready to install ; the same code at the same voices opens at once the
+    second time (the fingerprint in its manifest). Old `?code=…&view=run`
+    links still open the run view ;
   - **Apps** : install as an app on this computer ; open in faustmodular
     (the faustmodular button of the header does it too) ;
   - **Files** : `.dsp`, the diagrams, the math documentation, the PWA ;

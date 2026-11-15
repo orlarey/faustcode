@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PWA_TEMPLATES, appFiles, compilePwaDsp, contentType, fillTemplate, packPwa, pwaEntries, pwaName, pwaReadme, versionDate } from './pwa-export.js';
+import { PWA_TEMPLATES, appFiles, appFingerprint, compilePwaDsp, contentType, fillTemplate, packPwa, pwaEntries, pwaName, pwaReadme, versionDate } from './pwa-export.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
@@ -136,4 +136,23 @@ test('appFiles : the PWA served by apps/sw.js — no service worker of its own, 
   assert.match(by['index.html'].data, /<button id="faustcode-install-button" type="button"[^>]*>Install Osc<\/button>[\s\S]*beforeinstallprompt[\s\S]*<\/script>\n<\/body>/);
   assert.match(by['index.html'].data, /<link rel="manifest" href="\.\/manifest\.json">/);
   assert.match(by['index.html'].data, /<title>Osc<\/title>/);
+});
+
+test('appFingerprint : the code and the voices, 16 hex digits', async () => {
+  const a = await appFingerprint('process = _;', 0);
+  assert.match(a, /^[0-9a-f]{16}$/);
+  assert.equal(await appFingerprint('process = _;', 0), a);
+  assert.notEqual(await appFingerprint('process = _;', 8), a);
+  assert.notEqual(await appFingerprint('process = +;', 0), a);
+});
+
+test('appFiles : the fingerprint in the manifest (play.html reads it)', async () => {
+  const f = await faust();
+  const dsp = await compilePwaDsp(f, { code: 'process = _;', name: 'W', voices: 0, args: '-ftz 2' });
+  const fingerprint = await appFingerprint('process = _;', 0);
+  const files = appFiles({ name: 'W', version: 'v', templates: templates(), faustwasm: '', dsp, fingerprint });
+  const manifest = JSON.parse(files.find((x) => x.path === 'manifest.json').data);
+  assert.deepEqual(manifest.faustcode, { fingerprint });
+  const without = JSON.parse(appFiles({ name: 'W', version: 'v', templates: templates(), faustwasm: '', dsp }).find((x) => x.path === 'manifest.json').data);
+  assert.equal(without.faustcode, undefined);
 });

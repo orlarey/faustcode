@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Faust app</title>
+  <!-- play.html : the page a QR code of faustcode opens (spec_partage.md,
+       « La page player ») : no editor, the app built on this device, then
+       opened. play.js does it. -->
+  <style>
+    :root {
+      --bg: #0b0e13;
+      --text: #b0b0b0;
+      --title: #e5f2f5;
+      --soft: #93a8af;
+      --value: #c6d8df;
+      --accent: #9ff5d2;
+      --error: #ffb35a;
+    }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+    body {
+      font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+    }
+    main {
+      width: min(360px, 100% - 32px);
+      display: flex; flex-direction: column; align-items: center; gap: 28px;
+      padding: 32px 0;
+    }
+    .spinner {
+      width: 64px; height: 64px; box-sizing: border-box; border-radius: 50%;
+      border: 4px solid rgba(152, 255, 210, 0.15); border-top-color: var(--accent);
+      animation: turn 0.9s linear infinite;
+    }
+    .spinner.done { animation: none; border-color: var(--error); }
+    @keyframes turn { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+    h1 { margin: 0; font-size: 26px; font-weight: 600; color: var(--title); text-align: center; word-break: break-word; }
+    .sub { margin: 8px 0 0; color: var(--value); text-align: center; }
+    .soft { margin: 4px 0 0; font-size: 13px; color: var(--soft); text-align: center; }
+    ol { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 12px; }
+    li { display: flex; align-items: center; gap: 12px; color: var(--soft); }
+    li .mark {
+      width: 22px; height: 22px; flex: none; box-sizing: border-box; border-radius: 50%;
+      border: 2px solid rgba(152, 255, 210, 0.3);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700; color: var(--bg);
+    }
+    li.now { color: var(--title); }
+    li.now .mark { border-color: var(--accent); }
+    li.done { color: var(--value); }
+    li.done .mark { background: var(--accent); border-color: var(--accent); }
+    .error { color: var(--error); text-align: center; white-space: pre-wrap; font-size: 14px; }
+    .error:empty { display: none; }
+    footer { font-size: 12px; color: var(--soft); text-align: center; }
+    a { color: var(--accent); }
+    a:hover { color: #d8fbe9; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="spinner" aria-hidden="true"></div>
+    <div>
+      <h1 id="name">Faust app</h1>
+      <p class="sub" id="what">Preparing the app for this device…</p>
+      <p class="soft">A few seconds, the first time only.</p>
+    </div>
+    <ol aria-live="polite">
+      <li id="step-compiler"><span class="mark" aria-hidden="true"></span>Loading the Faust compiler</li>
+      <li id="step-compiled"><span class="mark" aria-hidden="true"></span>Compiling</li>
+      <li id="step-installing"><span class="mark" aria-hidden="true"></span>Opening the app</li>
+    </ol>
+    <p class="error" id="error" role="alert"></p>
+    <footer>Made with Faust · <a id="edit" href="./">Open the code in faustcode</a></footer>
+  </main>
+  <script type="module" src="./play.js"></script>
+</body>
+</html>
