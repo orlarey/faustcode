@@ -1,8 +1,8 @@
 // pwa-export.js — the program as a Progressive Web App, what
 // `faust2wasm <file.dsp> <dir> -pwa [-poly]` of faustwasm makes, made in the
-// page. In the run view :
-//   - Download ▸ pwa (.zip) : downloaded as `<name>-pwa.zip`, to serve anywhere ;
-//   - the pwa button : installed at once as an app of this origin, at
+// page :
+//   - Share ▸ Files ▸ <name>-pwa.zip : downloaded as `<name>-pwa.zip`, to serve anywhere ;
+//   - Share ▸ Apps ▸ Install : installed at once as an app of this origin, at
 //     apps/<name>/, served from the cache by apps/sw.js ; its window opens
 //     and offers to install it (installPwaApp).
 //
@@ -148,7 +148,7 @@ export async function packPwa(options) {
 }
 
 // ---------------------------------------------------------------------
-// An app installed by faustcode (the pwa button of the run view) : served by apps/sw.js
+// An app installed by faustcode (Share ▸ Apps ▸ Install) : served by apps/sw.js
 // ---------------------------------------------------------------------
 
 /** The cache apps/sw.js serves the apps from. */
@@ -187,7 +187,7 @@ function withInstallButton(html, name) {
         <span id="faustcode-install-text"></span>
     </div>
     <script>
-        // faustcode : install this app (the pwa button of the run view)
+        // faustcode : install this app (Share ▸ Apps ▸ Install)
         (() => {
             const box = document.getElementById("faustcode-install");
             const text = document.getElementById("faustcode-install-text");

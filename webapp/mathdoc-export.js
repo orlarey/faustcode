@@ -1,4 +1,4 @@
-// mathdoc-export.js — File ▸ Math documentation : the .zip of the
+// mathdoc-export.js — Share ▸ Files ▸ <name>-mdoc.zip : the .zip of the
 // mathematical documentation of a program (faust -mdoc, mathdoc.js),
 // made with the libfaust of the page and the .lib files of faustcode,
 // its diagrams drawn in PNG by the browser, then downloaded.

@@ -23,14 +23,13 @@ import {
   requestSensorPermission,
   setPlaybackAudioSession,
 } from './play-gate.js';
-import { openShareDialog } from './share-ui.js';
+import { openSharePanel } from './share-ui.js';
 import { OPEN_IN_MODULAR_EVENT } from './playground-link.js';
 import { showNotice } from './notice.js';
 import { clearAllDrafts, getDraft } from './drafts.js';
 import * as files from './files.js';
 import * as disk from './disk-files.js';
 import * as storesUi from './stores-ui.js';
-import { MATHDOC_LANGS } from './mathdoc.js';
 import { exportMathdoc } from './mathdoc-export.js';
 import { exportPwa, installPwaApp } from './pwa-export.js';
 
@@ -940,26 +939,6 @@ async function renderCurrentView(targetContainer = viewContainer) {
           };
         }
       },
-      onInstallApp: async () => {
-        try {
-          await installRunApp();
-          hideError();
-        } catch (err) {
-          const message = `Error: ${err.message}`;
-          showError(message);
-          showErrorOverlay(message);
-        }
-      },
-      onDownload: async (format) => {
-        try {
-          await downloadCurrentViewArtifact(format);
-          hideError();
-        } catch (err) {
-          const message = `Error: ${err.message}`;
-          showError(message);
-          showErrorOverlay(message);
-        }
-      },
       onScrollChange: (line) => {
         if (!scrollState || typeof line !== 'number') return;
         if (state.currentSha !== renderSha) return;
@@ -1090,7 +1069,7 @@ function renderFileLabel(open = files.getOpen(), session = null) {
   const text = `${name}${dirty ? ' ●' : ''}${open ? ` · v${open.index + 1}/${open.count}` : ''}${ahead ? ' ⇡' : ''}`;
   if (sessionLabel.textContent !== text) sessionLabel.textContent = text;
   const from = open && open.file.store
-    ? ` From the store ${open.file.store.store} (${open.file.store.path})${ahead ? ', changed since : ⇡ File ▸ Publish' : ''}.`
+    ? ` From the store ${open.file.store.store} (${open.file.store.path})${ahead ? ', changed since : ⇡ Share ▸ Publish' : ''}.`
     : '';
   const title = open
     ? `${open.file.name} — version ${open.index + 1} of ${open.count}${dirty ? ', unsaved changes' : ''} (${s.sha1.slice(0, 8)}).${from} Click : all files ; ◀ ▶ : versions.`
@@ -1569,10 +1548,12 @@ function hideInterface() {
 }
 
 /**
- * The pwa button of the run view : the code it plays, at its voices, installed
- * as an app (pwa-export.js, installPwaApp), its window opened.
+ * Share ▸ Apps ▸ Install : the saved version of the open file, at `voices`,
+ * installed as an app (pwa-export.js, installPwaApp), its window opened.
+ * Synchronous up to the window it opens : opened after an await, the
+ * window would be blocked as a pop-up.
  */
-async function installRunApp() {
+async function installAsApp(voices = 0) {
   if (state.sessionIndex >= state.sessions.length || state.sessionIndex < 0) return;
   const session = state.sessions[state.sessionIndex];
   if (!session) return;
@@ -1591,7 +1572,7 @@ async function installRunApp() {
     if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
     const code = await response.text();
     const appVersion = headerAppVersion ? headerAppVersion.textContent.replace(/^v/, '') : '';
-    const result = await installPwaApp({ code, filename: session.filename, voices: state.runGlobal.polyVoices || 0, appVersion });
+    const result = await installPwaApp({ code, filename: session.filename, voices, appVersion });
     if (win && !win.closed) win.location.href = result.url;
     const mode = result.voices > 0 ? `${result.voices} voices${result.hasEffect ? ' + effect' : ''}` : 'mono';
     showNotice(
@@ -1607,88 +1588,93 @@ async function installRunApp() {
   }
 }
 
-/**
- * Purpose: Download the artifact corresponding to the currently selected view.
- * How: Resolves endpoint and filename from active session/view context and delegates network transfer to `downloadFromUrl`.
- */
-async function downloadCurrentViewArtifact(format = '') {
-  if (state.sessionIndex >= state.sessions.length || state.sessionIndex < 0) return;
-  const session = state.sessions[state.sessionIndex];
-  if (!session) return;
-
-  const base = session.filename.replace(/\.dsp$/i, '') || 'session';
-  let url = `/api/${session.sha1}/download/dsp`;
-  let filename = `${base}.dsp`;
-
-  if (state.currentView === 'svg') {
-    url = `/api/${session.sha1}/download/svg`;
-    filename = `${base}-svg.zip`;
-  } else if (state.currentView === 'run') {
-    // the PWA of the code the run view plays, at its voices (pwa-export.js)
-    const response = await fetch(`/api/${session.sha1}/user_code.dsp`);
-    if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
-    const code = await response.text();
-    showLoading();
-    try {
-      const appVersion = headerAppVersion ? headerAppVersion.textContent.replace(/^v/, '') : '';
-      const result = await exportPwa({ code, filename: session.filename, voices: state.runGlobal.polyVoices || 0, appVersion });
-      const mode = result.voices > 0 ? `${result.voices} voices${result.hasEffect ? ' + effect' : ''}` : 'mono';
-      showNotice(`${result.filename} downloaded (${mode}) : its README.txt tells how to serve it.`, 8000);
-    } finally {
-      hideLoading();
-    }
-    return;
-  }
-
-  await downloadFromUrl(url, filename, 'Download failed');
-}
-
 // Event listeners
 // An editor's code is known to compile (submitted, or unchanged from the
 // stored version) : an error banner left by an earlier broken version of
 // it is obsolete.
 document.addEventListener('faustcode:code-ok', () => hideError());
 
+/** Runs an action of the Share panel : its error shown, the loading overlay meanwhile when `busy`. */
+async function shareAction(label, run, busy = false) {
+  if (busy) showLoading();
+  hideError();
+  try {
+    await run();
+  } catch (err) {
+    showError(`${label} : ${err && err.message ? err.message : err}`);
+  } finally {
+    if (busy) hideLoading();
+  }
+}
+
+/** The Share panel (share-ui.js, spec_partage.md) for the version shown of the open file. */
+async function openShare() {
+  const session = getCurrentSession();
+  if (!session || !state.currentSha) return;
+  const sha = state.currentSha;
+  const [code, errors] = await Promise.all([
+    sessionCode(sha),
+    fetch(`/api/${sha}/errors.log`).then((r) => (r.ok ? r.text() : '')).catch(() => ''),
+  ]);
+  if (code === null) throw new Error('cannot read the code of the session');
+  const open = files.getOpen();
+  const filename = open ? open.file.name : files.nameForSession(sha);
+  const base = filename.replace(/\.(dsp|lib)$/i, '') || 'session';
+  const dspView = state.views.find((v) => v.id === 'dsp');
+  const pending = state.currentView === 'dsp' && dspView && typeof dspView.getPendingCode === 'function' ? dspView.getPendingCode() : null;
+  // a file published in a store, unchanged : the link of the store, at its commit
+  const published = open && open.file.store && open.file.store.code === open.sha ? open.file : null;
+  await openSharePanel({
+    filename,
+    version: open ? `v${open.index + 1}/${open.count}` : '',
+    code,
+    isLib: /\.lib$/i.test(filename),
+    errors,
+    unsaved: getDraft(sha) !== null || (pending !== null && pending !== code),
+    voices: state.runGlobal.polyVoices || 0,
+    storeUrl: published ? storesUi.storeShareUrl(location, published) : null,
+    storeName: published ? published.store.store : null,
+    writableStores: storesUi.publishing.writable(),
+    actions: {
+      installApp: (voices) => shareAction('Install as an app', () => installAsApp(voices)),
+      openInModular: () => shareAction('faustmodular', () => openInModular()),
+      downloadDsp: () => shareAction('Download', () => downloadFromUrl(`/api/${sha}/download/dsp`, filename)),
+      downloadDiagrams: () => shareAction('Download', () => downloadFromUrl(`/api/${sha}/download/svg`, `${base}-svg.zip`)),
+      downloadMathdoc: (lang) => exportOpenMathdoc(lang),
+      downloadPwa: (voices) => shareAction('PWA', async () => {
+        const appVersion = headerAppVersion ? headerAppVersion.textContent.replace(/^v/, '') : '';
+        const result = await exportPwa({ code, filename, voices, appVersion });
+        const mode = result.voices > 0 ? `${result.voices} voices${result.hasEffect ? ' + effect' : ''}` : 'mono';
+        showNotice(`${result.filename} downloaded (${mode}) : its README.txt tells how to serve it.`, 8000);
+      }, true),
+      publish: (store) => publishOpenFile(store),
+      openStores: () => storesUi.openStoresPanel({ open: showStoreModules }),
+    },
+  });
+}
+
 if (shareBtn) {
-  shareBtn.addEventListener('click', async () => {
-    const session = getCurrentSession();
-    if (!session || !state.currentSha) return;
-    try {
-      const response = await fetch(`/api/${state.currentSha}/user_code.dsp`);
-      if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
-      const code = await response.text();
-      // a file published in a store, unchanged : the link of the store, at its commit
-      const open = files.getOpen();
-      const published = open && open.file.store && open.file.store.code === open.sha ? open.file : null;
-      await openShareDialog({
-        code,
-        filename: files.nameForSession(session.sha1),
-        poly: state.runGlobal.polyVoices || 0,
-        storeUrl: published ? storesUi.storeShareUrl(location, published) : null,
-        storeName: published ? published.store.store : null,
-      });
-    } catch (err) {
-      showError(`Share failed: ${err.message}`);
-    }
+  shareBtn.addEventListener('click', () => {
+    openShare().catch((err) => showError(`Share failed: ${err.message}`));
   });
 }
 
 // The session opened in faustmodular, as a module of its open document
-// (playground-link.js : added, or updated when it is linked to a module).
+// (playground-link.js : added, or updated when it is linked to a module) :
+// the faustmodular button, and Share ▸ Apps.
+async function openInModular() {
+  const session = getCurrentSession();
+  if (!session || !state.currentSha) return;
+  const code = await sessionCode(state.currentSha);
+  if (code === null) throw new Error('cannot read the code of the session');
+  document.dispatchEvent(new CustomEvent(OPEN_IN_MODULAR_EVENT, {
+    detail: { sha1: state.currentSha, code, filename: files.nameForSession(session.sha1) },
+  }));
+}
+
 if (modularBtn) {
-  modularBtn.addEventListener('click', async () => {
-    const session = getCurrentSession();
-    if (!session || !state.currentSha) return;
-    try {
-      const response = await fetch(`/api/${state.currentSha}/user_code.dsp`);
-      if (!response.ok) throw new Error(`cannot read the session code (${response.status})`);
-      const code = await response.text();
-      document.dispatchEvent(new CustomEvent(OPEN_IN_MODULAR_EVENT, {
-        detail: { sha1: state.currentSha, code, filename: files.nameForSession(session.sha1) },
-      }));
-    } catch (err) {
-      showError(`faustmodular: ${err.message}`);
-    }
+  modularBtn.addEventListener('click', () => {
+    openInModular().catch((err) => showError(`faustmodular: ${err.message}`));
   });
 }
 
@@ -2138,29 +2124,6 @@ async function openFromStore(link) {
   }
 }
 
-/**
- * Publish to a store (spec_files_store.md, « Publier ») : greyed without a
- * store in write, direct with one, one entry per store with several.
- */
-function publishItems(open) {
-  const writable = storesUi.publishing.writable();
-  if (writable.length <= 1) {
-    const store = writable[0];
-    return [
-      { separator: true },
-      {
-        label: store ? `Publish to ${store}…` : 'Publish to a store…',
-        disabled: !open || !store,
-        action: () => publishOpenFile(store),
-      },
-    ];
-  }
-  return [
-    { separator: true, title: 'Publish to' },
-    ...writable.map((store) => ({ label: `${store}…`, recent: true, disabled: !open, action: () => publishOpenFile(store) })),
-  ];
-}
-
 /** Publishes the current version of the open file to a store, as a module. */
 async function publishOpenFile(store) {
   const open = files.getOpen();
@@ -2191,23 +2154,11 @@ async function publishOpenFile(store) {
   );
 }
 
-/**
- * Math documentation (faust -mdoc, mathdoc.js) : one entry per language of
- * the documentator, greyed for a .lib (no `process`).
- */
-function mathdocItems(open) {
-  const usable = !!open && !/\.lib$/i.test(open.file.name);
-  return [
-    { separator: true, title: 'Math documentation (LaTeX .zip)' },
-    ...MATHDOC_LANGS.map((l) => ({ label: l.label, recent: true, disabled: !usable, action: () => exportOpenMathdoc(l.code) })),
-  ];
-}
-
-/** Downloads the math documentation of the text shown of the open file. */
+/** Share ▸ Files : the math documentation of the saved version of the open file. */
 async function exportOpenMathdoc(lang) {
   const open = files.getOpen();
   if (!open) return;
-  const code = shownText(open) ?? (await sessionCode(open.sha));
+  const code = await sessionCode(open.sha);
   if (code === null) return;
   showLoading();
   hideError();
@@ -2262,8 +2213,6 @@ function openFileMenu() {
     { label: 'Save as…', key: k('S', true), action: saveOpenFileAs, disabled: !open },
     { label: 'Rename…', action: renameOpenFile, disabled: !open },
     { label: 'Move to trash', action: trashOpenFile, disabled: !open },
-    ...publishItems(open),
-    ...mathdocItems(open),
   ];
   const menu = document.createElement('div');
   menu.className = 'file-menu';

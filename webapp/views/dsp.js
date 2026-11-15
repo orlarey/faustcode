@@ -29,7 +29,7 @@ function updateDirty(b) {
   if (submitBtnEl) submitBtnEl.disabled = !b;
 }
 
-export async function render(container, { sha, sessionFilename, onSubmit, onDownload }) {
+export async function render(container, { sha, sessionFilename, onSubmit }) {
   // Tear down any previous instance for this view.
   if (editor) { editor.destroy(); editor = null; }
   titleEl = null;
@@ -62,12 +62,6 @@ export async function render(container, { sha, sessionFilename, onSubmit, onDown
                 <option value="200">200%</option>
               </select>
             </div>
-            <div class="download-select-group toolbar-download-right">
-              <button class="download-select-btn code-download-btn" type="button">Download</button>
-              <select class="download-select-value code-download-format" aria-label="DSP download format">
-                <option value="dsp">.dsp</option>
-              </select>
-            </div>
           </div>
         </div>
         <div class="cm-host"></div>
@@ -78,8 +72,6 @@ export async function render(container, { sha, sessionFilename, onSubmit, onDown
     submitBtnEl = container.querySelector('.dsp-submit-btn');
     const host = container.querySelector('.cm-host');
     const zoomSelect = container.querySelector('.code-zoom-select');
-    const downloadBtn = container.querySelector('.code-download-btn');
-    const downloadFormat = container.querySelector('.code-download-format');
 
     // Load the session in the live mirror bus first : the editor then
     // starts from the session's unsaved draft if there is one (dirty),
@@ -99,12 +91,6 @@ export async function render(container, { sha, sessionFilename, onSubmit, onDown
     if (zoomSelect) {
       zoomSelect.addEventListener('change', () => {
         editor.setZoom(Number(zoomSelect.value) || 100);
-      });
-    }
-    if (downloadBtn && typeof onDownload === 'function') {
-      downloadBtn.addEventListener('click', () => {
-        const format = downloadFormat ? downloadFormat.value : 'dsp';
-        void onDownload(format);
       });
     }
   } catch (err) {

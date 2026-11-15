@@ -127,6 +127,46 @@ Le player et l'application installée sont une seule et même page : rien à mai
 - GitHub Pages sert alors l'application à `https://<owner>.github.io/<repo>/apps/<nom>/`, environ une minute après le commit. L'onglet Audience propose ce lien dès qu'il répond : court, immédiat, durable, indépendant de faustcode.
 - Republier met l'application à jour ; le service worker de la PWA (nom de cache daté) remplace l'ancienne version chez ceux qui l'ont installée.
 
+## Le circuit de l'application publiée
+
+```
+ machine du démonstrateur          GitHub                          téléphones
+ faustcode (navigateur)            dépôt du store                  navigateur
+  · compile le module   ─ commit ─▶ owner/store
+  · prépare la PWA                    │ déploiement (~1 min)
+                                      ▼
+                                   GitHub Pages ─── HTTPS ──────▶  la PWA
+                                   owner.github.io/store/apps/organ/
+```
+
+La machine du démonstrateur ne sert jamais rien aux téléphones : elle compile et envoie, GitHub sert. Une page web ne peut pas recevoir de connexions ; un serveur sur le réseau local ne serait pas en HTTPS, donc sans service worker, sans AudioWorklet ni capteurs sur iOS : ce mode est écarté.
+
+**Une fois pour toutes.**
+
+1. Un store en écriture, suivi par faustcode avec son jeton (*File ▸ Stores…*), comme pour publier un module.
+2. GitHub Pages activé sur ce dépôt : *Settings ▸ Pages ▸ Deploy from a branch ▸ `main` ▸ `/ (root)`*. Le dépôt doit être public (Pages est payant pour un dépôt privé). Le jeton (*Contents*) ne peut pas l'activer : c'est un réglage manuel, unique.
+
+**Avant la présentation.**
+
+3. Le module sauvegardé, les voix choisies dans le panneau.
+4. *Share ▸ Publish ▸ As an app* : faustcode compile le module comme la vue Run (`dsp-module.wasm`, `dsp-meta.json`, le mixer et l'effet en poly), y joint les fichiers de la PWA (environ 450 Ko, 90 Ko compressés) et les envoie **en un commit**, par l'API de GitHub, à `apps/<nom>/` du store, avec un fichier `.nojekyll` à la racine s'il n'y est pas (sans lui, Jekyll ignore les fichiers dont le nom commence par `_`).
+5. GitHub Pages déploie en 30 s à 1 min. faustcode interroge l'adresse jusqu'à ce qu'elle réponde, puis l'onglet Audience propose `https://<owner>.github.io/<store>/apps/<nom>/` : une cinquantaine de caractères, un QR code peu dense, lisible du fond de la salle.
+
+**Pendant la présentation.**
+
+6. *Share ▸ Audience ▸ Published app ▸ Projection* : le QR code en plein écran.
+7. Le participant le flashe ; son navigateur charge l'application **depuis GitHub**, sans passer par la machine du démonstrateur. Les téléphones ont besoin d'Internet ; la machine du démonstrateur, plus à ce stade.
+8. Le premier toucher démarre le son (et demande l'accès aux capteurs sur iOS).
+9. Le service worker de l'application s'enregistre et met ses fichiers en cache (avec la correction de `faust-pwa.js`, signalée en amont).
+10. Installation : bouton *Installer* (Android) ou *Partager ▸ Sur l'écran d'accueil* (iOS). L'application s'ouvre ensuite en plein écran, hors ligne.
+
+**Après : la mise à jour.**
+
+11. Republier crée un nouveau commit et un nouveau déploiement ; les nouveaux visiteurs ont aussitôt la nouvelle version.
+12. Chez ceux qui l'ont déjà, le service worker de faustwasm sert d'abord son cache et n'appelle pas `skipWaiting` : à la première ouverture avec réseau, la nouvelle version se télécharge en arrière-plan mais l'ancienne joue encore ; elle ne devient active qu'après **fermeture complète et réouverture** (la page se recharge alors d'elle-même). En séance : un nouveau QR code, ou faire rouvrir l'application. Un `skipWaiting` rendrait la mise à jour immédiate : à proposer en amont, dans faustwasm.
+
+**Détails.** L'index du store (lu par faustmodular) ignore `apps/` : ce sont des fichiers compilés, pas des modules. Le jeton ne quitte jamais le navigateur, sauf vers `api.github.com`.
+
 ## Ce qu'il coûte, ce qu'il ne change pas
 
 - Une application fabriquée par `play.html` vit dans le stockage du site `orlarey.github.io` *du téléphone* ; effacer les données de ce site la retire. Une application publiée n'a pas cette fragilité.
@@ -145,10 +185,12 @@ Le player et l'application installée sont une seule et même page : rien à mai
 | Rec | reste dans la vue Run |
 | File | nouveau, ouvrir, sauvegarder, versions, stores (lecture) |
 
-::: important [Décisions ouvertes]
-1. **Bouton faustmodular** — *proposition : le garder en raccourci.* Ce n'est pas un export ponctuel mais un lien vivant (chaque sauvegarde met le module à jour), utilisé à chaque séance avec faustmodular.
-2. **Download des vues** — *proposition : les retirer.* Un seul endroit pour les fichiers ; la vue svg pourrait garder un clic droit *Enregistrer le diagramme* sur le diagramme affiché.
-3. **L'hébergement des applications publiées** — *proposition : le dépôt du store lui-même*, à `apps/<nom>/`, avec GitHub Pages activé une fois pour toutes dans ses réglages (le jeton actuel, *Contents* en lecture et écriture, suffit pour les commits ; activer Pages demande les réglages du dépôt). L'autre voie, un dépôt dédié aux applications, sépare les sources des fichiers compilés mais demande un second jeton.
+::: important [Décisions]
+Prises le 15 novembre 2026 : la 3 par Yann Orlarey ; la 1 et la 2 selon la proposition, faute de réponse, à revoir à l'usage.
+
+1. **Bouton faustmodular** — *retenu : le garder en raccourci.* Ce n'est pas un export ponctuel mais un lien vivant (chaque sauvegarde met le module à jour), utilisé à chaque séance avec faustmodular.
+2. **Download des vues** — *retenu : les retirer.* Un seul endroit pour les fichiers ; la vue svg pourrait garder un clic droit *Enregistrer le diagramme* sur le diagramme affiché.
+3. **L'hébergement des applications publiées** — *retenu : le dépôt du store lui-même*, à `apps/<nom>/`, avec GitHub Pages activé une fois pour toutes dans ses réglages (le jeton actuel, *Contents* en lecture et écriture, suffit pour les commits ; activer Pages demande les réglages du dépôt). L'autre voie, un dépôt dédié aux applications, sépare les sources des fichiers compilés mais demande un second jeton.
 :::
 
 # Implémentation suggérée

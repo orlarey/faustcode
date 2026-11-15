@@ -1,5 +1,5 @@
 // apps/sw.js — the service worker of the apps faustcode installs
-// (the pwa button of the run view, pwa-export.js : installPwaApp).
+// (Share ▸ Apps ▸ Install, pwa-export.js : installPwaApp).
 //
 // Its scope is this directory (…/faustcode/apps/) : the pages of faustcode
 // do not go through it. faustcode writes the files of each app to the cache

@@ -15,7 +15,7 @@ export function getName() {
  * Purpose: Render the SVG diagrams browser for one session.
  * How: Loads available diagram files, builds navigation UI, and manages SVG loading/zoom/history state.
  */
-export async function render(container, { sha, onDownload }) {
+export async function render(container, { sha }) {
   try {
     // Fetch the available SVG file list.
     const response = await fetch(`/api/${sha}/svg`);
@@ -68,12 +68,6 @@ export async function render(container, { sha, onDownload }) {
                 </select>
               </div>
             </div>
-            <div class="download-select-group toolbar-download-right">
-              <button class="download-select-btn svg-download-btn" type="button">Download</button>
-              <select class="download-select-value svg-download-format" aria-label="Diagram download format">
-                <option value="svg">.svg (.zip)</option>
-              </select>
-            </div>
           </div>
         </div>
         <div class="svg-container">
@@ -90,17 +84,9 @@ export async function render(container, { sha, onDownload }) {
     const zoomSelect = container.querySelector('.svg-zoom-select');
     const upBtn = container.querySelector('[data-action="up"]');
     const currentFileLabel = container.querySelector('.svg-current-file');
-    const downloadBtn = container.querySelector('.svg-download-btn');
-    const downloadFormat = container.querySelector('.svg-download-format');
     const progressOverlay = container.querySelector('.svg-progress');
     let currentZoom = 100;
     let zoomMode = 'manual';
-    if (downloadBtn && typeof onDownload === 'function') {
-      downloadBtn.addEventListener('click', () => {
-        const format = downloadFormat ? downloadFormat.value : '';
-        void onDownload(format);
-      });
-    }
 
     /**
      * Purpose: Intercept clicks on links inside rendered SVG diagrams.
