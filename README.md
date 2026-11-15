@@ -75,6 +75,21 @@ don't have to fight Chrome's ES module cache while iterating.
   `.lib`, or a code that imports a `.lib` of faustcode. The link to share
   it, at the commit published, is copied. `⇡` in the header : the file
   changed since the store.
+- **Math documentation** (0.19.0) : File ▸ Math documentation (LaTeX
+  .zip) ▸ English, Français, Deutsch or Italiano downloads
+  `<name>-mdoc.zip`, what `faust -mdoc -mdlang <lang>` makes for the text
+  shown : `tex/<name>.tex` (the equations of the signals, the controls,
+  the block diagram, the listings), `svg/`, `src/` (the sources, the
+  libraries and the `.lib` files of faustcode included). The documentator
+  of the libfaust of the page does it ; `webapp/mathdoc.js` gives it its
+  files (`webapp/vendor/faust-mathdoc/`), escapes the texts Faust copies
+  raw into the LaTeX (labels, units, metadata : a `_`, `%` or `&` stops
+  pdflatex), and adds a PNG at 300 dpi of each diagram the document
+  includes, so `cd tex && pdflatex -output-directory=../pdf <name>.tex`
+  (twice) makes the PDF ; `README.txt` in the archive tells the rest.
+  Write `<mdoc>…</mdoc>` in the code (not in a comment) to write the
+  document yourself, with `<equation>`, `<diagram>`, `<metadata>`,
+  `<notice/>` and `<listing/>` ; without it, Faust makes a default one.
 - Sessions hydrate from the browser's Origin Private File System on
   every load, so closing the tab doesn't lose your patches.
 

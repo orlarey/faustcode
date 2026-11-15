@@ -30,6 +30,8 @@ import { clearAllDrafts, getDraft } from './drafts.js';
 import * as files from './files.js';
 import * as disk from './disk-files.js';
 import * as storesUi from './stores-ui.js';
+import { MATHDOC_LANGS } from './mathdoc.js';
+import { exportMathdoc } from './mathdoc-export.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -2127,6 +2129,42 @@ async function publishOpenFile(store) {
   );
 }
 
+/**
+ * Math documentation (faust -mdoc, mathdoc.js) : one entry per language of
+ * the documentator, greyed for a .lib (no `process`).
+ */
+function mathdocItems(open) {
+  const usable = !!open && !/\.lib$/i.test(open.file.name);
+  return [
+    { separator: true, title: 'Math documentation (LaTeX .zip)' },
+    ...MATHDOC_LANGS.map((l) => ({ label: l.label, recent: true, disabled: !usable, action: () => exportOpenMathdoc(l.code) })),
+  ];
+}
+
+/** Downloads the math documentation of the text shown of the open file. */
+async function exportOpenMathdoc(lang) {
+  const open = files.getOpen();
+  if (!open) return;
+  const code = shownText(open) ?? (await sessionCode(open.sha));
+  if (code === null) return;
+  showLoading();
+  hideError();
+  try {
+    const appVersion = headerAppVersion ? headerAppVersion.textContent.replace(/^v/, '') : '';
+    const result = await exportMathdoc({ code, filename: open.file.name, lang, appVersion });
+    showNotice(
+      result.warnings.length
+        ? `${result.filename} downloaded, but : ${result.warnings.join(' ; ')}`
+        : `${result.filename} downloaded : its README.txt tells how to make the PDF.`,
+      8000,
+    );
+  } catch (err) {
+    showError(`Math documentation : ${err && err.message ? err.message : err}`);
+  } finally {
+    hideLoading();
+  }
+}
+
 function closeFileMenu() {
   if (!fileMenuEl) return;
   fileMenuEl.remove();
@@ -2163,6 +2201,7 @@ function openFileMenu() {
     { label: 'Rename…', action: renameOpenFile, disabled: !open },
     { label: 'Move to trash', action: trashOpenFile, disabled: !open },
     ...publishItems(open),
+    ...mathdocItems(open),
   ];
   const menu = document.createElement('div');
   menu.className = 'file-menu';
