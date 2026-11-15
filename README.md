@@ -93,6 +93,9 @@ don't have to fight Chrome's ES module cache while iterating.
   Write `<mdoc>…</mdoc>` in the code (not in a comment) to write the
   document yourself, with `<equation>`, `<diagram>`, `<metadata>`,
   `<notice/>` and `<listing/>` ; without it, Faust makes a default one.
+  The document lists the program and the `.lib` files of faustcode, not
+  the libraries of Faust (140 pages for `stdfaust.lib` ; they stay in
+  `src/`) : `<listing dependencies="true"/>` in a `<mdoc>` lists them too.
 - Sessions hydrate from the browser's Origin Private File System on
   every load, so closing the tab doesn't lose your patches.
 

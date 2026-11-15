@@ -14,10 +14,13 @@ import {
   latexEscape,
   latexOfChar,
   mathdocName,
+  mathdocTexts,
   packMathdoc,
   runMathdoc,
   setPngDpi,
+  shortenListings,
   svgRasterSize,
+  wantsDependencies,
   withSvgSize,
 } from './mathdoc.js';
 import { crc32 } from './zip.js';
@@ -101,6 +104,36 @@ test('declareUnicode : literate in ASCII for listings, \\DeclareUnicodeCharacter
   assert.match(out, /\\DeclareUnicodeCharacter\{0142\}\{\\l\{\}\}\n/);
   assert.match(out, /\\DeclareUnicodeCharacter\{1F3B5\}\{\{\\ttfamily\[U\+1F3B5\]\}\}\n\n\\begin\{document\}/);
   assert.equal(declareUnicode('\\begin{document}\nascii\n'), '\\begin{document}\nascii\n');
+});
+
+test('wantsDependencies : <listing dependencies="true"/>, not in a comment', () => {
+  assert.equal(wantsDependencies('<mdoc><listing dependencies="true"/></mdoc>'), true);
+  assert.equal(wantsDependencies('<mdoc><listing mdoctags="false" dependencies = "true" /></mdoc>'), true);
+  assert.equal(wantsDependencies('<mdoc><listing/></mdoc>'), false);
+  assert.equal(wantsDependencies('<mdoc><listing dependencies="false"/></mdoc>'), false);
+  assert.equal(wantsDependencies('// <listing dependencies="true"/>\nprocess=_;'), false);
+});
+
+test('mathdocTexts', () => {
+  const t = mathdocTexts('// x\n:autolsttitle1\t"\\section{Faust code listing}"\n\n:autolsttext1\t"One."\n');
+  assert.deepEqual(t, { autolsttitle1: '\\section{Faust code listing}', autolsttext1: 'One.' });
+});
+
+const listing = (file, body) => `\n\\bigskip\\bigskip\n\\begin{lstlisting}[caption=\\texttt{${file}}]\n${body}\\end{lstlisting}\n\n`;
+
+test('shortenListings : the program and the .lib of faustcode, the title of one listing', () => {
+  const texts = {
+    autolsttitle1: '\\section{Faust code listing}', autolsttext1: 'One listing.',
+    autolsttitle2: '\\section{Faust code listings}', autolsttext2: 'The listings, including dependencies.',
+  };
+  const head = ' \\section{Faust code listings} \\label{listing}  The listings, including dependencies. ';
+  const tex = head + listing('T.dsp', 'process = os.osc(440);\n') + listing('stdfaust.lib', 'a\nb\n') + listing('empty.lib', '') + listing('mine.lib', 'g = *(2);\n') + '\n\\end{document}\n';
+  const one = shortenListings(tex, { keep: ['T.dsp'], texts });
+  assert.equal(one, ' \\section{Faust code listing} \\label{listing}  One listing. ' + listing('T.dsp', 'process = os.osc(440);\n') + '\n\\end{document}\n');
+  const two = shortenListings(tex, { keep: ['T.dsp', 'mine.lib'], texts });
+  assert.ok(two.startsWith(head)); // two listings : the title of several
+  assert.deepEqual([...two.matchAll(/texttt\{([^}]*)\}/g)].map((m) => m[1]), ['T.dsp', 'mine.lib']);
+  assert.equal(shortenListings(tex, { keep: ['T.dsp', 'stdfaust.lib', 'empty.lib', 'mine.lib'], texts }), tex);
 });
 
 test('includedSvgs', () => {
@@ -194,6 +227,9 @@ test('runMathdoc : the autodoc of a program, in French, with a library of faustc
   const code = 'declare name "my_synth";\nimport("stdfaust.lib");\nm = library("mine.lib");\n' +
     'process = fi.lowpass(2, hslider("freq_hz[unit:%]", 1000, 20, 20000, 1)) : m.gain(0.5);';
   const doc = runMathdoc(c, { code, filename: 'my synth.dsp', lang: 'fr', args: '-I /mathdoc-test-libs/' });
+  const withLib = runMathdoc(c, { code, filename: 'my synth.dsp', lang: 'fr', args: '-I /mathdoc-test-libs/', libraries: ['mine.lib'] });
+  const withLibTex = text(withLib, 'my-synth-mdoc/tex/my-synth.tex');
+  assert.deepEqual([...withLibTex.matchAll(/caption=\\texttt\{([^}]*)\}/g)].map((m) => m[1]), ['my-synth.dsp', 'mine.lib']);
   assert.equal(doc.name, 'my-synth');
   for (const d of ['tex', 'svg', 'src', 'cpp', 'pdf']) assert.ok(doc.dirs.includes(`my-synth-mdoc/${d}/`), d);
   const paths = doc.files.map((f) => f.path);
@@ -210,9 +246,9 @@ test('runMathdoc : the autodoc of a program, in French, with a library of faustc
   assert.match(tex, /\\textsf\{"freq\\_hz"\} \\ \(\\%\) & \$/);
   assert.doesNotMatch(tex.slice(0, tex.indexOf('\\begin{lstlisting}[caption')), /\\textbf\{[^}]*[^\\]_/);
   assert.deepEqual(includedSvgs(tex), ['svg/svg-01/process.svg']);
-  // the comments of maths.lib have π : listings gets it in ASCII
-  assert.match(tex, /\{π\}\{\{\\ensuremath\{\\pi\}\}\}1/);
-  assert.match(tex, /\\DeclareUnicodeCharacter\{03C0\}/);
+  // listed : the program and the .lib of faustcode ; the libraries of Faust only in src/
+  assert.deepEqual([...tex.matchAll(/caption=\\texttt\{([^}]*)\}/g)].map((m) => m[1]), ['my-synth.dsp']);
+  assert.ok(!/\{π\}\{/.test(tex)); // the π of maths.lib went with its listing
   // nothing left in the filesystem of libfaust
   assert.ok(!fs.readdir('/').some((f) => /^my-synth/.test(f)));
 });
@@ -229,6 +265,19 @@ test('runMathdoc : <mdoc> tags, and a program that does not compile', async () =
   // the compiler still works after the error
   assert.ok(runMathdoc(c, { code: 'process = +;', filename: 'Ok.dsp' }).files.length > 0);
   assert.throws(() => runMathdoc(c, { code: 'process = +;', lang: 'xx' }), /no language/);
+});
+
+test('runMathdoc : the autodoc lists the program alone ; <listing dependencies="true"/> lists all', async () => {
+  const c = await compiler();
+  const short = text(runMathdoc(c, { code: 'import("stdfaust.lib");\nprocess = os.osc(440);', filename: 'Osc.dsp' }), 'Osc-mdoc/tex/Osc.tex');
+  assert.deepEqual([...short.matchAll(/caption=\\texttt\{([^}]*)\}/g)].map((m) => m[1]), ['Osc.dsp']);
+  assert.match(short, /\\section\{Faust code listing\}/);
+  assert.match(short, /This section provides the listing of the Faust code used to generate this document\./);
+  assert.doesNotMatch(short, /including dependencies/);
+  const code = 'import("stdfaust.lib");\n<mdoc><equation>process</equation><listing dependencies="true"/></mdoc>\nprocess = os.osc(440);';
+  const all = text(runMathdoc(c, { code, filename: 'Osc.dsp' }), 'Osc-mdoc/tex/Osc.tex');
+  const files = [...all.matchAll(/caption=\\texttt\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(files.length > 3 && files[0] === 'Osc.dsp' && files.includes('oscillators.lib'), files.join());
 });
 
 test('packMathdoc : the archive, its README and the PNG of the diagrams', async () => {

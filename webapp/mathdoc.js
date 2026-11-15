@@ -64,8 +64,59 @@ export function mathdocName(filename) {
 
 /** Whether Faust finds a <mdoc> tag in the code (comments and strings aside). */
 export function hasMdocTag(code) {
-  const bare = String(code).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"/g, ' ');
-  return /<mdoc>/.test(bare);
+  return /<mdoc>/.test(bareCode(code));
+}
+
+/** The code without its comments and strings (what the parser of Faust reads as tags). */
+function bareCode(code) {
+  return String(code).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"/g, ' ');
+}
+
+/** Whether the code asks for the listings of the libraries : `<listing dependencies="true"/>`. */
+export function wantsDependencies(code) {
+  // the comments aside, not the strings : the value of the attribute is one
+  const uncommented = String(code).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ' ');
+  return /<listing\b[^>]*\bdependencies\s*=\s*"true"/.test(uncommented);
+}
+
+/** The texts of a mathdoctexts-<lang>.txt : `:key "value"` lines. */
+export function mathdocTexts(text) {
+  const map = {};
+  for (const m of String(text).matchAll(/^:(\w+)\s+"(.*)"\s*$/gm)) map[m[1]] = m[2];
+  return map;
+}
+
+/**
+ * The listings of the document : those of the files `keep` (the program, the
+ * .lib files of faustcode), not those of the libraries of Faust, which the
+ * documentator lists unless `<listing dependencies="false"/>` (thousands of
+ * lines : 140 pages for stdfaust.lib ; their sources stay in src/). With one
+ * listing left, the autodoc gets the title and text of one listing.
+ *
+ * @param {string} tex
+ * @param {{ keep: string[], texts?: object }} options  texts : mathdocTexts of the language
+ */
+export function shortenListings(tex, { keep, texts = {} }) {
+  const kept = new Set(keep);
+  let left = 0;
+  let removed = 0;
+  let out = tex.replace(
+    /\n\\bigskip\\bigskip\n\\begin\{lstlisting\}\[caption=\\texttt\{([^}\n]*)\}\]\n[\s\S]*?(?<=\n)\\end\{lstlisting\}\n\n?/g,
+    (m, file) => {
+      if (kept.has(file)) {
+        left++;
+        return m;
+      }
+      removed++;
+      return '';
+    },
+  );
+  if (removed && left === 1) {
+    for (const [two, one] of [['autolsttitle2', 'autolsttitle1'], ['autolsttext2', 'autolsttext1']]) {
+      if (texts[two] && texts[one]) out = out.split(texts[two]).join(texts[one]);
+    }
+  }
+  return out;
 }
 
 const LATEX_TEXT = {
@@ -334,7 +385,9 @@ Made by faustcode${appVersion ? ` ${appVersion}` : ''} with Faust${faustVersion 
 
 ${row(texFile, 'the LaTeX document')}
 ${row('svg/', `the block diagrams in SVG${pngs ? `, and a PNG (${MATHDOC_PNG_DPI} dpi)\n${indent}of each diagram the document shows` : ''}`)}
-${row('src/', 'the Faust sources used, the libraries included')}
+${row('src/', 'the Faust sources used, the libraries included (the document')}
+${indent}lists the program and the .lib files of faustcode ; with
+${indent}<listing dependencies="true"/> in a <mdoc>, the libraries too)
 ${row('pdf/', 'for the PDF')}
 ${row('cpp/', 'empty (libfaust in the browser has no C++ backend)')}
 
@@ -424,12 +477,14 @@ function readTree(fs, dir, prefix) {
  * installed (installMathdocResources).
  *
  * @param {object} compiler  FaustCompiler (faustwasm)
- * @param {{ code: string, filename?: string, lang?: string, args?: string }} options
- *   args : more options of Faust (the -I of the libraries of faustcode)
+ * @param {{ code: string, filename?: string, lang?: string, args?: string, libraries?: string[] }} options
+ *   args : more options of Faust (the -I of the libraries of faustcode) ;
+ *   libraries : the .lib files of faustcode, listed with the program (shortenListings),
+ *   unless the code has <listing dependencies="true"/> : then all are
  * @returns {{ name: string, dirs: string[], files: { path: string, data: Uint8Array }[] }}
  *   paths under `<name>-mdoc/`, the .tex fixed (fixMathdocTex)
  */
-export function runMathdoc(compiler, { code, filename = 'faust.dsp', lang = 'en', args = '' }) {
+export function runMathdoc(compiler, { code, filename = 'faust.dsp', lang = 'en', args = '', libraries = [] }) {
   if (!MATHDOC_LANGS.some((l) => l.code === lang)) throw new Error(`mathdoc : no language ${lang}`);
   const fs = compiler.fs();
   const name = mathdocName(filename);
@@ -456,7 +511,15 @@ export function runMathdoc(compiler, { code, filename = 'faust.dsp', lang = 'en'
   const texPath = `${name}-mdoc/tex/${name}.tex`;
   const tex = tree.files.find((f) => f.path === texPath);
   if (!tex) throw new Error(`mathdoc : ${texPath} not made`);
-  tex.data = new TextEncoder().encode(fixMathdocTex(new TextDecoder().decode(tex.data), { autodoc: !hasMdocTag(code) }));
+  let text = new TextDecoder().decode(tex.data);
+  if (!wantsDependencies(code)) {
+    let texts = {};
+    try {
+      texts = mathdocTexts(fs.readFile(`${RESOURCE_DIR}/mathdoctexts-${lang}.txt`, { encoding: 'utf8' }));
+    } catch { /* the titles of several listings kept */ }
+    text = shortenListings(text, { keep: [`${name}.dsp`, ...libraries], texts });
+  }
+  tex.data = new TextEncoder().encode(fixMathdocTex(text, { autodoc: !hasMdocTag(code) }));
   return { name, ...tree };
 }
 
