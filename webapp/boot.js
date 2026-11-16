@@ -41,7 +41,7 @@ import {
 import { tryHandOff, installHandoffResponder, probeTabs } from './tab-handoff.js';
 import { installPlaygroundLink, isPlaygroundLink } from './playground-link.js';
 import { showNotice } from './notice.js';
-import { initFiles, codeSha1, getOpen, nameForSession } from './files.js';
+import { initFiles, codeSha1, getOpen, nameForSession, savedText } from './files.js';
 import { openStoreFile, storeErrorText, startStores, stores } from './stores-ui.js';
 import { storeLink, withoutStoreLink } from './vendor/fauststore/fauststore.js';
 import { writeIfHandle, hasFileAccess } from './disk-files.js';
@@ -452,11 +452,21 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
   // registered editor (dsp view, floating overlay) replaces its buffer
   // and goes clean. The floating overlay's title bar filename label is
   // updated separately since it lives outside the editor.
-  let lastShaForSync = getActiveSha1();
-  setInterval(() => {
+  // The editors show the open document (spec_documents.md) : its saved text,
+  // and its working copy (drafts.js, by the id of the document) ; with no
+  // document, the compilation shown.
+  let lastKeyForSync = null;
+  setInterval(async () => {
+    const open = getOpen();
     const sha = getActiveSha1();
-    if (sha !== lastShaForSync) {
-      lastShaForSync = sha;
+    const key = open ? `doc:${open.file.id}:${open.sha}` : `sha:${sha}`;
+    if (key === lastKeyForSync) return;
+    lastKeyForSync = key;
+    if (open) {
+      const text = (await savedText(open.file.id)) ?? '';
+      editorBus.loadSession(text, `doc:${open.file.id}`);
+      floatingEditor.loadSession({ sha1: open.sha, code: text, filename: open.file.name });
+    } else {
       const s = sha ? getSession(sha) : null;
       editorBus.loadSession(s ? s.code : '', sha);
       if (s) floatingEditor.loadSession({ sha1: s.sha1, code: s.code, filename: nameForSession(s.sha1) });

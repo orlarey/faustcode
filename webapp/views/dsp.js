@@ -29,7 +29,7 @@ function updateDirty(b) {
   if (submitBtnEl) submitBtnEl.disabled = !b;
 }
 
-export async function render(container, { sha, sessionFilename, onSubmit }) {
+export async function render(container, { sha, sessionFilename, onSubmit, draftKey, documentText }) {
   // Tear down any previous instance for this view.
   if (editor) { editor.destroy(); editor = null; }
   titleEl = null;
@@ -40,9 +40,13 @@ export async function render(container, { sha, sessionFilename, onSubmit }) {
     : 'patch.dsp';
 
   try {
-    const response = await fetch(`/api/${sha}/user_code.dsp`);
-    if (!response.ok) throw new Error('Failed to load DSP code');
-    const code = await response.text();
+    // the saved text of the open document (spec_documents.md), else the code of the compilation shown
+    let code = typeof documentText === 'string' ? documentText : null;
+    if (code === null) {
+      const response = await fetch(`/api/${sha}/user_code.dsp`);
+      if (!response.ok) throw new Error('Failed to load DSP code');
+      code = await response.text();
+    }
 
     container.innerHTML = `
       <div class="code-view">
@@ -77,7 +81,7 @@ export async function render(container, { sha, sessionFilename, onSubmit }) {
     // starts from the session's unsaved draft if there is one (dirty),
     // else from the stored code.
     const bus = typeof window !== 'undefined' ? window.__faustEditorBus : null;
-    if (bus) bus.loadSession(code, sha);
+    if (bus) bus.loadSession(code, draftKey || sha);
 
     editor = createFaustEditor({
       doc: bus ? bus.currentBuffer() : code,

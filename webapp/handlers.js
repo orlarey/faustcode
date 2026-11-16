@@ -166,7 +166,7 @@ async function compileSubmission(args) {
   // Idempotent fast path : same code already submitted → reuse the entry.
   const existing = getSession(sha1);
   if (existing) {
-    attachSubmission(sha1, filename);
+    attachSubmission(sha1, filename, null, { mode: 'submit', code });
     shimSetActiveSha(sha1);
     return {
       sha1,
@@ -215,7 +215,7 @@ async function compileSubmission(args) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
-    attachSubmission(sha1, filename);
+    attachSubmission(sha1, filename, null, { mode: 'submit', code });
     shimSetActiveSha(sha1);
     return {
       sha1,
@@ -261,7 +261,7 @@ async function compileSubmission(args) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
-    attachSubmission(sha1, filename);
+    attachSubmission(sha1, filename, null, { mode: 'submit', code });
     shimSetActiveSha(sha1);
   }
 

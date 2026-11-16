@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   FAUSTSTORE_VERSION, storeLink, withoutStoreLink, parseFileUrl, sha1, StoreReader, gitBlobSha, buildIndex, serializeIndex, parseIndex,
 } from './vendor/fauststore/fauststore.js';
-import { normalizeSource } from './file-index.js';
+import { normalizeSource } from './document-index.js';
 
 test('the version of the copy', () => {
   assert.match(FAUSTSTORE_VERSION, /^1\.\d+\.\d+$/);

@@ -11,7 +11,7 @@
 
 import { decodeShareParams, SHARE_POLY } from './share-link.js';
 import { storeLink, parseStoreRef, StoreReader, nameOfPath } from './vendor/fauststore/fauststore.js';
-import { normalizeSource } from './file-index.js';
+import { normalizeSource } from './document-index.js';
 import { appFingerprint, installedApp, installPwaApp, pwaName } from './pwa-export.js';
 
 const $ = (id) => document.getElementById(id);

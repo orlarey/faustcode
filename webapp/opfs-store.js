@@ -313,3 +313,69 @@ export async function writeFilesJson(data) {
   const root = await getRoot();
   await writeTextFile(root, FILES_FILE, JSON.stringify(data, null, 2));
 }
+
+// ---------------------------------------------------------------------
+// documents.json and the saved texts (spec_documents.md, « Le stockage ») :
+// the documents (document-index.js) at the OPFS root, and the saved text of
+// each one in documents/<id>/saved.dsp — the compilations (sessions/) are a
+// cache, rebuilt from it. files.json of before is moved to legacy/.
+// ---------------------------------------------------------------------
+
+const DOCUMENTS_FILE = 'documents.json';
+const DOCUMENTS_DIR = 'documents';
+
+export async function readDocumentsJson() {
+  const root = await getRoot();
+  const text = await readTextFile(root, DOCUMENTS_FILE);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+export async function writeDocumentsJson(data) {
+  const root = await getRoot();
+  await writeTextFile(root, DOCUMENTS_FILE, JSON.stringify(data, null, 2));
+}
+
+async function documentDir(id, create) {
+  const root = await getRoot();
+  try {
+    const docs = await root.getDirectoryHandle(DOCUMENTS_DIR, { create });
+    return await docs.getDirectoryHandle(id, { create });
+  } catch (err) {
+    if (!create && err && err.name === 'NotFoundError') return null;
+    throw err;
+  }
+}
+
+export async function writeSavedText(id, text) {
+  await writeTextFile(await documentDir(id, true), 'saved.dsp', text);
+}
+
+export async function readSavedText(id) {
+  const dir = await documentDir(id, false);
+  return dir ? readTextFile(dir, 'saved.dsp') : null;
+}
+
+export async function removeDocumentDir(id) {
+  const root = await getRoot();
+  try {
+    const docs = await root.getDirectoryHandle(DOCUMENTS_DIR);
+    await docs.removeEntry(id, { recursive: true });
+  } catch (err) {
+    if (!err || err.name !== 'NotFoundError') throw err;
+  }
+}
+
+/** files.json of before, moved to legacy/files.json (never read again). */
+export async function moveFilesJsonToLegacy() {
+  const root = await getRoot();
+  const text = await readTextFile(root, FILES_FILE);
+  if (text === null) return;
+  const legacy = await root.getDirectoryHandle('legacy', { create: true });
+  await writeTextFile(legacy, FILES_FILE, text);
+  await root.removeEntry(FILES_FILE);
+}

@@ -119,7 +119,10 @@ function safeSessionName(name) {
   throw new Error(`Unsupported file extension : ${trimmed} (only .dsp and .lib are accepted)`);
 }
 
-async function compileAndStore(rawCode, filename, fileId = null) {
+// fileId : a save of this document (spec_documents.md : its saved content, even with errors : the
+// compilation is then stored with its errors, and the views keep showing the last one that compiled) ;
+// mode : how a code without document is opened (files.js, attachSubmission : 'open', 'new').
+async function compileAndStore(rawCode, filename, fileId = null, mode = 'open') {
   // The source as faustcode keeps it (spec_files_store.md, « Identité des
   // codes ») : CRLF and lone CR become LF, so the sha1 is that of faustmodular.
   const code = normalizeSource(rawCode);
@@ -127,8 +130,8 @@ async function compileAndStore(rawCode, filename, fileId = null) {
   const sha1 = await sha1Hex(code);
   const existing = getSession(sha1);
   if (existing) {
-    const file = attachSubmission(sha1, fname, fileId);
-    shimSetActiveSha(sha1);
+    const file = attachSubmission(sha1, fname, fileId, { mode, code });
+    if (!existing.errors) shimSetActiveSha(sha1);
     return { sha1, errors: existing.errors, fileId: file ? file.id : null };
   }
 
@@ -153,7 +156,7 @@ async function compileAndStore(rawCode, filename, fileId = null) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
-    const file = attachSubmission(sha1, fname, fileId);
+    const file = attachSubmission(sha1, fname, fileId, { mode, code });
     shimSetActiveSha(sha1);
     return { sha1, errors: '', fileId: file ? file.id : null };
   }
@@ -194,7 +197,7 @@ async function compileAndStore(rawCode, filename, fileId = null) {
   }
 
   let file = null;
-  if (errors === '') {
+  if (errors === '' || fileId) {
     await storeSession({
       sha1,
       filename: fname,
@@ -206,8 +209,8 @@ async function compileAndStore(rawCode, filename, fileId = null) {
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
     });
-    file = attachSubmission(sha1, fname, fileId);
-    shimSetActiveSha(sha1);
+    file = attachSubmission(sha1, fname, fileId, { mode, code });
+    if (errors === '') shimSetActiveSha(sha1);
   }
 
   return { sha1, errors, fileId: file ? file.id : null };
@@ -252,7 +255,8 @@ async function handleSubmit(init) {
     const previous = getActiveSha1();
     const edited = globalThis.__faustEditorBus ? globalThis.__faustEditorBus.sha : null;
     const fileId = typeof parsed.fileId === 'string' ? parsed.fileId : null;
-    const result = await compileAndStore(code, parsed.filename || 'patch.dsp', fileId);
+    const mode = parsed.mode === 'new' ? 'new' : 'open';
+    const result = await compileAndStore(code, parsed.filename || 'patch.dsp', fileId, mode);
     const { sha1, errors } = result;
     announceSubmit({ sha1, previous, edited, code: normalizeSource(code), filename: parsed.filename || 'patch.dsp', errors });
     return ok({ sha1, errors, fileId: result.fileId });

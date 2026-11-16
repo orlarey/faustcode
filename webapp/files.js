@@ -1,40 +1,34 @@
-// files.js — the files of this browser (spec_files_store.md), on top of the
-// sessions : file-index.js is the model, this module keeps it in OPFS
-// (files.json), knows the open file and its shown version, and tells the
-// other faustcode tabs when the files change.
+// files.js — the documents of this browser (spec_documents.md) : document-index.js
+// is the model, this module keeps it in OPFS (documents.json, and the saved
+// text of each document in documents/<id>/saved.dsp), knows the open document,
+// and tells the other faustcode tabs when the documents change.
 //
-// - initFiles() after initSessions() : reads files.json, rewrites the
-//   sessions whose code has a "\r" under the sha1 of their normalized code,
-//   and adopts the sessions that belong to no file (grouped by name : the
-//   migration of the sessions kept before the files) ;
-// - attachSubmission() after each stored submit : the session becomes a
-//   version of a file (the given file, or by name) ;
-// - the open file and its shown version : setOpen(), syncOpen(sha) when the
-//   active session changed elsewhere (MCP, another path) ;
-// - the .lib files given to the compiler : libSessionsForCompile().
+// The compilations (sessions.js, sessions/<sha1>/) are a cache, indexed by the
+// sha1 of a text : the views show the compilation of the saved content of the
+// open document. The names of this module (files, attachSubmission…) are
+// those of faustcode 0.16 to 0.25, whose files had versions : a document has
+// a saved content and an origin, no versions.
 //
-// Writes of files.json are serialized and come after the sessions they
-// reference (a session is stored before it is attached).
+// - initFiles() after initSessions() : reads documents.json ; the first time,
+//   migrates files.json (each file a document at its current version, moved
+//   to legacy/files.json) ;
+// - attachSubmission() after each stored submit : the saved content of a
+//   document (a save), or a document opened (a link, a drop : never
+//   overwrites one), or the document of MCP submit ;
+// - the .lib documents of the Library given to the compiler : libSessionsForCompile().
 
-import { FileIndex, normalizeSource, isLibName } from './file-index.js';
+import { DocumentIndex, normalizeSource, isLibName, describeOrigin, LIBRARY } from './document-index.js';
 import * as opfs from './opfs-store.js';
-import {
-  listSessions,
-  getSession,
-  storeSession,
-  deleteSession,
-  onSessionDeleted,
-  refreshSessionsFromDisk,
-} from './sessions.js';
+import { getHandle } from './disk-files.js';
+import { listSessions, getSession, refreshSessionsFromDisk } from './sessions.js';
 
-let index = new FileIndex();
-let openId = null;          // the open file
-let openVersion = -1;       // the index of the shown version in its versions
+let index = new DocumentIndex();
+let openId = null;          // the open document
 let ready = false;
 const listeners = [];
 const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('faustcode-files') : null;
 
-export { normalizeSource, isLibName };
+export { normalizeSource, isLibName, describeOrigin };
 
 async function sha1Hex(text) {
   const bytes = new TextEncoder().encode(text);
@@ -56,8 +50,8 @@ let writing = Promise.resolve();
 function save({ broadcast = true } = {}) {
   const data = { ...index.toJSON(), open: openId };
   writing = writing
-    .then(() => opfs.writeFilesJson(data))
-    .catch((err) => console.warn('[files] files.json write failed :', err));
+    .then(() => opfs.writeDocumentsJson(data))
+    .catch((err) => console.warn('[files] documents.json write failed :', err));
   if (broadcast && channel) writing.then(() => channel.postMessage({ type: 'files-changed' }));
   emit();
   return writing;
@@ -69,58 +63,80 @@ function emit() {
   }
 }
 
-/** Called after every change of the files or of the open file. */
+/** Called after every change of the documents or of the open document. */
 export function onFilesChange(cb) {
   listeners.push(cb);
 }
 
-// A session whose code has a "\r" : stored again under the sha1 of its
-// normalized code (merged with it if it exists), the old one deleted.
-async function normalizeStoredSessions() {
-  const renamed = new Map();
-  for (const s of listSessions()) {
-    if (typeof s.code !== 'string' || !s.code.includes('\r')) continue;
-    const code = normalizeSource(s.code);
-    const sha1 = await sha1Hex(code);
-    if (!getSession(sha1)) await storeSession({ ...s, sha1, code });
-    await deleteSession(s.sha1);
-    renamed.set(s.sha1, sha1);
+// The saved text of a document, kept with it (the cache of the compilations may be cleared).
+function keepSavedText(id, text) {
+  if (typeof text !== 'string') return;
+  writing = writing.then(() => opfs.writeSavedText(id, normalizeSource(text))).catch((err) => console.warn('[files] saved text not written :', err));
+}
+
+/** The saved text of a document : its file, else the compilation of its content. */
+export async function savedText(id) {
+  const doc = index.get(id);
+  if (!doc) return null;
+  const text = await opfs.readSavedText(id).catch(() => null);
+  if (typeof text === 'string') return text;
+  const s = getSession(doc.saved);
+  return s && typeof s.code === 'string' ? s.code : null;
+}
+
+// The files of faustcode 0.16 to 0.25 (files.json) : each a document of the Library at its current
+// version (of the disk if it had a file there), its text kept ; files.json moved to legacy/.
+async function migrateFiles() {
+  let files = null;
+  try { files = await opfs.readFilesJson(); } catch { files = null; }
+  const onDisk = new Set();
+  for (const f of (files && Array.isArray(files.files)) ? files.files : []) {
+    if (f && typeof f.id === 'string' && await getHandle(f.id).catch(() => null)) onDisk.add(f.id);
   }
-  return renamed;
+  const migrated = files ? DocumentIndex.fromFiles(files, { onDisk: (id) => onDisk.has(id) }) : new DocumentIndex();
+  // the sessions no file had (kept before the files, or by an older faustcode) : one document per name,
+  // at the most recent of them
+  const byName = new Map();
+  const live = migrated.liveShas();
+  for (const s of listSessions()) {
+    if (!s || live.has(s.sha1) || typeof s.filename !== 'string') continue;
+    const prev = byName.get(s.filename.toLowerCase());
+    if (!prev || (s.createdAt || 0) > (prev.createdAt || 0)) byName.set(s.filename.toLowerCase(), s);
+  }
+  for (const s of byName.values()) {
+    try { migrated.open(s.sha1, s.filename); } catch { /* a name faustcode does not accept */ }
+  }
+  for (const doc of migrated.documents) {
+    const s = getSession(doc.saved);
+    if (s && typeof s.code === 'string') await opfs.writeSavedText(doc.id, normalizeSource(s.code)).catch(() => undefined);
+  }
+  const open = files && typeof files.open === 'string' && migrated.get(files.open) ? files.open : null;
+  return { index: migrated, open, moved: !!files };
 }
 
 export async function initFiles() {
   if (ready) return;
   let data = null;
-  try { data = await opfs.readFilesJson(); } catch (err) { console.warn('[files] files.json read failed :', err); }
-  index = new FileIndex(data);
-  openId = data && typeof data.open === 'string' && index.get(data.open) ? data.open : null;
-
-  // Sessions with "\r" : their new sha1 replaces the old one in the versions.
-  const renamed = await normalizeStoredSessions();
-  for (const f of index.files) f.versions = f.versions.map((v) => renamed.get(v) || v);
-  // Versions whose session is gone (deleted in an older faustcode) leave.
-  for (const f of index.files) f.versions = f.versions.filter((v) => getSession(v));
-  index.files = index.files.filter((f) => f.versions.length > 0);
-  const adopted = index.adopt(listSessions());
-
+  try { data = await opfs.readDocumentsJson(); } catch (err) { console.warn('[files] documents.json read failed :', err); }
+  if (data) {
+    index = new DocumentIndex(data);
+    openId = typeof data.open === 'string' && index.get(data.open) ? data.open : null;
+  } else {
+    const migrated = await migrateFiles();
+    index = migrated.index;
+    openId = migrated.open;
+    await opfs.writeDocumentsJson({ ...index.toJSON(), open: openId });
+    if (migrated.moved) await opfs.moveFilesJsonToLegacy().catch((err) => console.warn('[files] files.json not moved :', err));
+  }
   ready = true;
-  if (renamed.size || adopted.length || !data) await save({ broadcast: false });
-
-  onSessionDeleted((sha) => {
-    if (index.forgetSession(sha)) {
-      if (openId && !index.get(openId)) { openId = null; openVersion = -1; }
-      save();
-    }
-  });
 
   if (channel) {
     channel.addEventListener('message', async (event) => {
       if (!event.data || event.data.type !== 'files-changed') return;
       await refreshSessionsFromDisk();
-      const fresh = await opfs.readFilesJson().catch(() => null);
-      index = new FileIndex(fresh);
-      if (openId && !index.get(openId)) { openId = null; openVersion = -1; }
+      const fresh = await opfs.readDocumentsJson().catch(() => null);
+      index = new DocumentIndex(fresh);
+      if (openId && !index.get(openId)) openId = null;
       emit();
     });
   }
@@ -146,36 +162,43 @@ export function getFile(id) {
   return index.get(id);
 }
 
-export function headOf(file) {
-  return index.head(file);
+/** The saved content of a document. */
+export function headOf(doc) {
+  return doc ? doc.saved : null;
 }
 
+/** The document to show for a content : `preferred` if it is its saved content, else the most recently modified one. */
 export function fileFor(sha, preferredId = openId) {
-  return index.fileFor(sha, preferredId);
+  if (!sha) return null;
+  const preferred = preferredId ? index.get(preferredId) : null;
+  if (preferred && !preferred.trashed && preferred.saved === sha) return preferred;
+  return index.withContent(sha)[0] || null;
+}
+
+export function byOrigin(origin) {
+  return index.byOrigin(origin);
 }
 
 export function getOpenFile() {
   return openId ? index.get(openId) : null;
 }
 
-/** The open file and the shown version : { file, index, sha, count } or null. */
+/** The open document : { file, sha, index: 0, count: 1 } (file : the document ; sha : its saved content), or null. */
 export function getOpen() {
   const file = getOpenFile();
   if (!file || file.trashed) return null;
-  let i = openVersion;
-  if (i < 0 || i >= file.versions.length) i = file.versions.length - 1;
-  return { file, index: i, sha: file.versions[i], count: file.versions.length };
+  return { file, index: 0, sha: file.saved, count: 1 };
 }
 
-/** The name under which a session is shown : the name of its file, or its own filename. */
+/** The name under which a compilation is shown : the name of its document, or its own filename. */
 export function nameForSession(sha) {
-  const file = sha ? index.fileFor(sha, openId) : null;
-  if (file) return file.name;
+  const doc = sha ? fileFor(sha) : null;
+  if (doc) return doc.name;
   const s = sha ? getSession(sha) : null;
   return (s && s.filename) || 'patch.dsp';
 }
 
-/** The .lib files given to the compiler : the current version of each, under the name of its file. */
+/** The .lib documents of the Library given to the compiler, at their saved content. */
 export function libSessionsForCompile() {
   if (!ready) return listSessions().filter((s) => isLibName(s.filename));
   const out = [];
@@ -187,44 +210,37 @@ export function libSessionsForCompile() {
 }
 
 // ---------------------------------------------------------------------
-// The open file
+// The open document
 // ---------------------------------------------------------------------
 
-/** Opens a file at a version (its current one by default) ; returns the sha1 shown. */
-export function setOpen(id, version = -1) {
-  const file = index.get(id);
-  if (!file) return null;
-  if (file.trashed) file.trashed = null;
+/** Opens a document ; returns its saved content. */
+export function setOpen(id) {
+  const doc = index.get(id);
+  if (!doc) return null;
+  if (doc.trashed) doc.trashed = null;
   const changed = openId !== id;
   openId = id;
-  openVersion = version >= 0 && version < file.versions.length ? version : file.versions.length - 1;
   if (changed) save({ broadcast: false });
   else emit();
-  return file.versions[openVersion];
+  return doc.saved;
 }
 
-/** No open file (the empty slot). */
+/** No open document (the empty slot). */
 export function closeOpen() {
   if (openId === null) return;
   openId = null;
-  openVersion = -1;
   save({ broadcast: false });
 }
 
-/**
- * The active session changed (MCP, a submit, another path) : the open file
- * follows. It stays open if it has this session (at the shown version if
- * that is the one, else at the last occurrence), else the file that has it.
- */
+/** The compilation shown changed (MCP, another path) : the open document follows, if one has this content. */
 export function syncOpen(sha) {
   if (!sha) return getOpen();
   const current = getOpen();
   if (current && current.sha === sha) return current;
-  const file = index.fileFor(sha, openId);
-  if (!file) return getOpen();
-  const changed = openId !== file.id;
-  openId = file.id;
-  openVersion = file.versions.lastIndexOf(sha);
+  const doc = fileFor(sha);
+  if (!doc) return getOpen();
+  const changed = openId !== doc.id;
+  openId = doc.id;
   if (changed) save({ broadcast: false });
   else emit();
   return getOpen();
@@ -235,44 +251,68 @@ export function syncOpen(sha) {
 // ---------------------------------------------------------------------
 
 /**
- * A stored session, after a submit : a version of the file `fileId` (a save
- * of the open file), else of the file of this name (open file first), else
- * of a new file. The file becomes the open one, at its current version.
+ * A stored compilation, after a submit (`code` : its text) :
+ *   - `fileId` : the saved content of that document (Save) ;
+ *   - mode 'open' (a link, a file dropped or pasted) : the document of this
+ *     name with this content, else a new document ;
+ *   - mode 'new' (New) : a new document ;
+ *   - mode 'submit' (MCP) : the open document of this name, else the document
+ *     of this name, else a new one.
+ * The document becomes the open one.
  */
-export function attachSubmission(sha, filename, fileId = null) {
+export function attachSubmission(sha, filename, fileId = null, { mode = 'open', code = null } = {}) {
   if (!ready || !sha) return null;
-  let file = fileId ? index.get(fileId) : null;
-  if (file) {
-    file.trashed = null;
-    index.addVersion(file.id, sha);
+  let doc = fileId ? index.get(fileId) : null;
+  if (doc) {
+    index.save(doc.id, sha);
+  } else if (mode === 'new') {
+    doc = index.create(filename, sha);
+  } else if (mode === 'submit') {
+    doc = index.submit(sha, filename, openId).doc;
   } else {
-    file = index.attach(sha, filename, openId).file;
+    doc = index.open(sha, filename).doc;
   }
-  openId = file.id;
-  openVersion = file.versions.length - 1;
+  keepSavedText(doc.id, code ?? (getSession(sha) || {}).code);
+  openId = doc.id;
   save();
-  return file;
+  return doc;
 }
 
-/** A new file at a session (Nouveau fichier, Ouvrir…, Enregistrer sous…), opened. */
+/** A new document at a content (Save as…, a resource of faustmodular), opened. */
 export function createFile(name, sha, extra = {}) {
-  const file = index.create(name, sha, extra);
-  openId = file.id;
-  openVersion = 0;
+  const doc = index.create(name, sha, { origin: extra.origin || LIBRARY, store: extra.store || null });
+  keepSavedText(doc.id, extra.code ?? (getSession(sha) || {}).code);
+  openId = doc.id;
   save();
-  return file;
+  return doc;
+}
+
+/** The saved content of a document changed outside (faustmodular, the disk) : `sha` with its text. */
+export function setSaved(id, sha, code) {
+  const doc = index.get(id);
+  if (!doc) return null;
+  index.save(id, sha);
+  keepSavedText(id, code);
+  save();
+  return doc;
 }
 
 export function renameFile(id, name) {
-  const file = index.rename(id, name);
+  const doc = index.rename(id, name);
   save();
-  return file;
+  return doc;
 }
 
 export function setFileStore(id, store) {
-  const file = index.setStore(id, store);
+  const doc = index.setStore(id, store);
   save();
-  return file;
+  return doc;
+}
+
+export function setFileOrigin(id, origin) {
+  const doc = index.setOrigin(id, origin);
+  save();
+  return doc;
 }
 
 export function uniqueName(name, exceptId = null) {
@@ -280,31 +320,30 @@ export function uniqueName(name, exceptId = null) {
 }
 
 export function trashFile(id) {
-  const file = index.moveToTrash(id);
-  if (file && openId === id) { openId = null; openVersion = -1; }
+  const doc = index.moveToTrash(id);
+  if (doc && openId === id) openId = null;
   save();
-  return file;
+  return doc;
 }
 
 export function restoreFile(id) {
-  const file = index.restore(id);
+  const doc = index.restore(id);
   save();
-  return file;
+  return doc;
 }
 
-/** Empties the trash, and deletes the sessions no file references any more. Returns how many files went. */
+/** Empties the trash (the documents and their saved texts). Returns how many documents went. */
 export async function emptyTrash() {
-  const count = index.trash().length;
-  const orphans = index.emptyTrash();
+  const removed = index.emptyTrash();
   await save();
-  for (const sha of orphans) await deleteSession(sha);
-  return count;
+  for (const doc of removed) await opfs.removeDocumentDir(doc.id).catch(() => undefined);
+  return removed.length;
 }
 
-/** Every file goes (every session was deleted). */
+/** Every document goes. */
 export function clearFiles() {
-  index.clear();
+  for (const doc of index.documents) void opfs.removeDocumentDir(doc.id).catch(() => undefined);
+  index = new DocumentIndex();
   openId = null;
-  openVersion = -1;
   save();
 }

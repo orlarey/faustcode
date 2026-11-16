@@ -457,16 +457,17 @@ function positionSessionPicker() {
 }
 
 /**
- * The files of the list (spec_files_store.md) : the last saved first
- * (chronological), or by the usage of their versions.
+ * The documents of the list (spec_documents.md) : the last saved first
+ * (chronological), or by the usage of their compilation.
  */
 function fileScore(file) {
-  let score = 0;
-  for (const sha of new Set(file.versions)) {
-    const s = state.sessions.find((x) => x.sha1 === sha);
-    if (s) score += Number(s.usageScore ?? s.usage_score) || 0;
-  }
-  return score;
+  const s = state.sessions.find((x) => x.sha1 === file.saved);
+  return s ? Number(s.usageScore ?? s.usage_score) || 0 : 0;
+}
+
+/** The key of the working copy of the open document (drafts.js) : its id ; else the compilation shown. */
+function draftKey(open = files.getOpen()) {
+  return open ? `doc:${open.file.id}` : state.currentSha;
 }
 
 function orderedFiles() {
@@ -475,10 +476,20 @@ function orderedFiles() {
   return list.sort((a, b) => b.modified - a.modified);
 }
 
-/** Opens a file at a version (its current one by default). */
-async function openFile(id, version = -1) {
-  const sha = files.setOpen(id, version);
-  if (sha) await loadSessionBySha(sha);
+/** Opens a document : the compilation of its saved content (compiled again from its text if the cache lost it). */
+async function openFile(id) {
+  const sha = files.setOpen(id);
+  if (!sha) return;
+  if (!state.sessions.some((s) => s.sha1 === sha)) await loadSessions();
+  if (!state.sessions.some((s) => s.sha1 === sha)) {
+    const doc = files.getFile(id);
+    const text = await files.savedText(id);
+    if (doc && typeof text === 'string') {
+      await fetch('/api/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: text, filename: doc.name, fileId: id }) });
+      await loadSessions();
+    }
+  }
+  await loadSessionBySha(sha);
 }
 
 /** Shows a session, the list of sessions reloaded if it is not in it yet. */
@@ -514,10 +525,10 @@ function renderSessionPickerList(rawQuery = '', options = {}) {
   }
   rows.push(...list.map((f) => {
     const active = !!open && open.file.id === f.id;
-    const count = f.versions.length;
+    const where = files.describeOrigin(f.origin);
     const details = state.sessionOrder === 'usage'
-      ? `${count} version${count > 1 ? 's' : ''} · score ${Math.round(fileScore(f))}`
-      : `${count} version${count > 1 ? 's' : ''} · saved ${new Date(f.modified).toLocaleString()}`;
+      ? `${where} · score ${Math.round(fileScore(f))}`
+      : `${where} · saved ${new Date(f.modified).toLocaleString()}`;
     return `
       <button type="button" class="session-picker-item${active ? ' active' : ''}" data-file="${escapeHtml(f.id)}">
         <span class="session-picker-item-main-row">
@@ -855,11 +866,14 @@ async function renderCurrentView(targetContainer = viewContainer) {
     const renderSession = renderSha
       ? state.sessions.find((s) => s.sha1 === renderSha) || null
       : null;
-    const sessionFilename = renderSession ? files.nameForSession(renderSession.sha1) : '';
+    const openDoc = files.getOpen();
+    const sessionFilename = openDoc ? openDoc.file.name : renderSession ? files.nameForSession(renderSession.sha1) : '';
     const scrollState = perSession || state.viewScroll[view.id];
     await view.render(renderTarget, {
       sha: renderSha,
       sessionFilename,
+      draftKey: draftKey(openDoc),
+      documentText: openDoc ? await files.savedText(openDoc.file.id) : null,
       runState,
       scrollState,
       onError: (message) => {
@@ -962,12 +976,10 @@ async function renderCurrentView(targetContainer = viewContainer) {
         // Falls back to the current session filename when none provided.
         // Cmd/Ctrl-S : a new version of the open file, and its file of the
         // disk written (with or without errors).
-        const open = files.getOpen();
-        const name = open ? open.file.name : (filename && filename.trim()) || sessionFilename || 'patch.dsp';
-        if (open) await writeDisk(open.file.id, code);
-        // A failure leaves the editor dirty (its draft is kept).
-        if (!(await submitCode(code, name, { keepOnError: true, fileId: open ? open.file.id : null }))) {
-          throw new Error('not compiled');
+        // Cmd/Ctrl-S : the open document saved to its origin (saveDocument). A failure leaves the
+        // editor dirty (its working copy is kept).
+        if (!(await saveDocument(code, (filename && filename.trim()) || sessionFilename || 'patch.dsp'))) {
+          throw new Error('not saved');
         }
       }
     });
@@ -1044,9 +1056,9 @@ function updateSessionNavigation({ sync = true } = {}) {
   } else {
     renderFileLabel(open, session);
     sessionLabel.classList.add('clickable');
-    // ◀ ▶ : the versions of the open file
-    sessionPrev.disabled = !open || open.index <= 0;
-    sessionNext.disabled = !open || open.index >= open.count - 1;
+    // no versions (spec_documents.md) : ◀ ▶ are gone
+    sessionPrev.disabled = true;
+    sessionNext.disabled = true;
     if (shareBtn) shareBtn.disabled = false;
     if (modularBtn) modularBtn.disabled = false;
     if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
@@ -1057,23 +1069,24 @@ function updateSessionNavigation({ sync = true } = {}) {
 }
 
 /**
- * The header label : the open file, a dot when the shown version has
- * unsaved changes (its draft), and the version shown among its versions.
+ * The header label (spec_documents.md, « L'en-tête ») : the open document, a
+ * dot when its working copy differs from its saved content, and its origin.
  */
 function renderFileLabel(open = files.getOpen(), session = null) {
   const s = session || (state.currentSha ? state.sessions.find((x) => x.sha1 === state.currentSha) : null);
-  if (!s) return;
+  if (!s && !open) return;
   const name = open ? open.file.name : s.filename;
-  const dirty = getDraft(s.sha1) !== null;
-  // ⇡ : the version shown differs from the code of the store (opened from it, or published to it)
+  const dirty = getDraft(draftKey(open)) !== null;
+  // ⇡ : the saved content differs from the code of the store (opened from it, or published to it)
   const ahead = !!(open && open.file.store && open.file.store.code !== open.sha);
-  const text = `${name}${dirty ? ' ●' : ''}${open ? ` · v${open.index + 1}/${open.count}` : ''}${ahead ? ' ⇡' : ''}`;
+  const where = open && open.file.origin.kind !== 'library' ? ` — ${files.describeOrigin(open.file.origin)}` : '';
+  const text = `${name}${dirty ? ' ●' : ''}${ahead ? ' ⇡' : ''}${where}`;
   if (sessionLabel.textContent !== text) sessionLabel.textContent = text;
   const from = open && open.file.store
     ? ` From the store ${open.file.store.store} (${open.file.store.path})${ahead ? ', changed since : ⇡ Export ▸ Publish' : ''}.`
     : '';
   const title = open
-    ? `${open.file.name} — version ${open.index + 1} of ${open.count}${dirty ? ', unsaved changes' : ''} (${s.sha1.slice(0, 8)}).${from} Click : all files ; ◀ ▶ : versions.`
+    ? `${open.file.name} — ${files.describeOrigin(open.file.origin)}${dirty ? ', unsaved changes' : ''}.${from} Click : open a document.`
     : `${s.filename} (${s.sha1.slice(0, 8)})`;
   if (sessionLabel.title !== title) sessionLabel.title = title;
 }
@@ -1082,20 +1095,11 @@ function renderFileLabel(open = files.getOpen(), session = null) {
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
 async function navigateToPrevious() {
-  await stepVersion(-1);
+  // no versions (spec_documents.md)
 }
 
-/** ▶ : the next version of the open file. */
 async function navigateToNext() {
-  await stepVersion(1);
-}
-
-async function stepVersion(delta) {
-  const open = files.getOpen();
-  if (!open) return;
-  const target = open.index + delta;
-  if (target < 0 || target >= open.count) return;
-  await openFile(open.file.id, target);
+  // no versions (spec_documents.md)
 }
 /**
  * Purpose: Implement `loadSessionByIndex` in the app flow.
@@ -1336,7 +1340,7 @@ async function unlockAudioGate() {
  * Purpose: Implement `submitCode` in the app flow.
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
-async function submitCode(code, filename, { keepOnError = false, render = true, fileId = null } = {}) {
+async function submitCode(code, filename, { keepOnError = false, render = true, fileId = null, mode = 'open' } = {}) {
   // keepOnError (code typed in an editor) : a DSP that does not compile is
   //   not stored, so stay on the current session — the text remains in the
   //   editor, unsaved — instead of switching to a session that does not exist.
@@ -1354,7 +1358,7 @@ async function submitCode(code, filename, { keepOnError = false, render = true, 
         'Content-Type': 'application/json'
       },
       // fileId : a save of this file (a new version of it, whatever its name)
-      body: JSON.stringify({ code, filename, fileId })
+      body: JSON.stringify({ code, filename, fileId, mode })
     });
 
     const result = await response.json();
@@ -1366,6 +1370,12 @@ async function submitCode(code, filename, { keepOnError = false, render = true, 
 
     if (keepOnError && result.errors && result.errors.trim()) {
       showError(result.errors);
+      // a save of a document (spec_documents.md) : written with its errors ; the views keep
+      // showing the last compilation that worked
+      if (fileId && result.fileId) {
+        updateSessionNavigation({ sync: false });
+        return true;
+      }
       return false;
     }
 
@@ -1627,11 +1637,11 @@ async function openShare() {
   const published = open && open.file.store && open.file.store.code === open.sha ? open.file : null;
   await openSharePanel({
     filename,
-    version: open ? `v${open.index + 1}/${open.count}` : '',
+    version: '',
     code,
     isLib: /\.lib$/i.test(filename),
     errors,
-    unsaved: getDraft(sha) !== null || (pending !== null && pending !== code),
+    unsaved: getDraft(draftKey(open)) !== null || (pending !== null && pending !== code),
     voices: state.runGlobal.polyVoices || 0,
     storeUrl: published ? storesUi.storeShareUrl(location, published) : null,
     storeName: published ? published.store.store : null,
@@ -1651,7 +1661,7 @@ async function openShare() {
       publish: (store) => publishOpenFile(store),
       // Export ▸ Publish ▸ as an app : the PWA at apps/ of the store, served by GitHub Pages
       publishApp: async (store, voices, onStatus) => {
-        if (getDraft(sha) !== null) throw new Error('Save your changes first : the saved version is published.');
+        if (getDraft(draftKey()) !== null) throw new Error('Save your changes first : the saved version is published.');
         try {
           return await publishApp({ publishing: storesUi.publishing, store, code, filename, voices, onStatus });
         } catch (err) {
@@ -1956,7 +1966,7 @@ async function submitNewBlankPatch() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     // a new file : a name not taken yet
-    body: JSON.stringify({ code: STARTER_DSP, filename: files.uniqueName('untitled.dsp') }),
+    body: JSON.stringify({ code: STARTER_DSP, filename: files.uniqueName('untitled.dsp'), mode: 'new' }),
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result || typeof result.sha1 !== 'string') {
@@ -1988,7 +1998,7 @@ function shownText(open = files.getOpen()) {
     ? dspView.getPendingCode()
     : null;
   if (pending !== null) return pending;
-  const draft = getDraft(open.sha);
+  const draft = getDraft(draftKey(open));
   if (draft !== null) return draft;
   const s = state.sessions.find((x) => x.sha1 === open.sha);
   return s && typeof s.code === 'string' ? s.code : null;
@@ -2014,19 +2024,35 @@ async function writeDisk(fileId, text) {
   }
 }
 
-/** Save : a new version of the open file (and its file of the disk written). */
+/**
+ * Save (spec_documents.md, « Enregistrer et compiler ») : the text compiled, then written to the
+ * origin of the open document — the Library and the disk even with errors ; a resource of
+ * faustmodular only if it compiles (faustmodular-link.js). Returns whether it was saved.
+ */
+async function saveDocument(code, fallbackName = 'patch.dsp') {
+  const open = files.getOpen();
+  if (!open) return submitCode(code, fallbackName, { keepOnError: true });
+  if (open.file.origin.kind === 'faustmodular' && saveToModular) return saveToModular(open.file, code);
+  if (open.file.origin.kind === 'disk') await writeDisk(open.file.id, code);
+  return submitCode(code, open.file.name, { keepOnError: true, fileId: open.file.id });
+}
+
+// The save of a resource of faustmodular (faustmodular-link.js sets it).
+let saveToModular = null;
+export function setModularSave(save) {
+  saveToModular = save;
+}
+
+/** Save : the working copy of the open document written to its origin. */
 async function saveOpenFile() {
   const open = files.getOpen();
   if (!open) return;
-  const text = shownText(open) ?? (await sessionCode(open.sha));
+  const text = shownText(open) ?? (await files.savedText(open.file.id));
   if (text === null) return;
-  await writeDisk(open.file.id, text);
   const dspView = state.views.find((v) => v.id === 'dsp');
-  const head = open.index === open.count - 1;
-  const dirty = getDraft(open.sha) !== null || (state.currentView === 'dsp' && dspView && dspView.getPendingCode && dspView.getPendingCode() !== null);
-  if (!dirty && head) return;
-  // an older version saved again becomes the current one
-  if (await submitCode(text, open.file.name, { keepOnError: true, fileId: open.file.id })) {
+  const dirty = getDraft(draftKey(open)) !== null || (state.currentView === 'dsp' && dspView && dspView.getPendingCode && dspView.getPendingCode() !== null);
+  if (!dirty) return;
+  if (await saveDocument(text, open.file.name)) {
     if (dspView && typeof dspView.markSubmitted === 'function') dspView.markSubmitted(text);
   }
 }
@@ -2143,12 +2169,8 @@ async function openFromStore(link) {
 async function publishOpenFile(store) {
   const open = files.getOpen();
   if (!open || !store) return;
-  if (getDraft(open.sha) !== null) {
-    showNotice('Save the file first (Cmd/Ctrl-S) : the saved versions are published.', 6000);
-    return;
-  }
-  if (open.index !== open.count - 1) {
-    showNotice(`The version shown is not the current one (v${open.index + 1}/${open.count}) : save it to make it current, then publish.`, 7000);
+  if (getDraft(draftKey(open)) !== null) {
+    showNotice('Save the document first (Cmd/Ctrl-S) : its saved content is published.', 6000);
     return;
   }
   const [code, errors] = await Promise.all([
