@@ -39,7 +39,7 @@ import {
   setShareIntent,
 } from './share-link.js';
 import { tryHandOff, installHandoffResponder, probeTabs } from './tab-handoff.js';
-import { installPlaygroundLink, isPlaygroundLink } from './playground-link.js';
+import { parseOpenParam } from './faustmodular-link.js';
 import { showNotice } from './notice.js';
 import { initFiles, codeSha1, getOpen, nameForSession, savedText } from './files.js';
 import { openStoreFile, storeErrorText, startStores, stores } from './stores-ui.js';
@@ -282,10 +282,12 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
       }
     }
   }
-  // Opened by faustmodular to edit its modules (playground-link.js) :
-  // like a shared link, do not take the MCP bridge from a faustcode tab
-  // already open.
-  if (isPlaygroundLink(location.search) && (await probeTabs()).length > 0) mcpAutoConnect = false;
+  // Opened by faustmodular to edit a resource of a scene (?open=faustmodular:…,
+  // faustmodular-link.js) : like a shared link, do not take the MCP bridge from
+  // a faustcode tab already open.
+  const resourceToOpen = parseOpenParam(bootParams.get('open'));
+  if (resourceToOpen && (await probeTabs()).length > 0) mcpAutoConnect = false;
+  if (bootParams.has('open')) history.replaceState(history.state, '', (() => { const u = new URL(location.href); u.searchParams.delete('open'); return u.href; })());
   if (SHARE_PARAMS.some((p) => bootParams.has(p))) {
     history.replaceState(history.state, '', stripShareParams(location.href));
   }
@@ -398,6 +400,7 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
   // otherwise keep a stale module entry across reloads.
   const appModule = await import(`./app.js?v=${Date.now()}`);
   if (storeToShow && appModule.showStoreAfterGate) appModule.showStoreAfterGate(storeToShow.replace(/@HEAD$/, ''));
+  if (resourceToOpen && appModule.openResourceAfterGate) appModule.openResourceAfterGate(resourceToOpen);
 
   // Floating editor : intercept the header pencil icon, drive it via
   // a /api/submit + /api/state round-trip, and keep the buffer in sync
@@ -482,25 +485,6 @@ if (disconnectBtn) disconnectBtn.addEventListener('click', () => disconnect());
   // Editor of faustmodular modules (?link=modular) : the module's
   // code becomes a session, shown in the dsp view ; each successful save
   // of it is sent back to the playground.
-  installPlaygroundLink({
-    submit: async (code, filename) => {
-      const sub = await dispatch({ id: `playground-submit-${Date.now()}`, op: 'submit', args: { code, filename } });
-      if (!sub.ok) throw new Error(sub.error.message);
-      return sub.result;
-    },
-    show: async (sha1) => {
-      if (!isAudioUnlocked()) {
-        // the audio gate's ENTER lands on it
-        setShareIntent({ sha1, view: 'dsp', poly: 0 });
-      } else {
-        await dispatch({ id: `playground-view-${Date.now()}`, op: 'set_view', args: { view: 'dsp' } });
-      }
-    },
-    notify: showNotice,
-    log: appendLog,
-    libfaust: async () => (await getFaust()).version,
-  });
-
   const params = new URLSearchParams(location.search);
   if (mcpAutoConnect && (params.get('mcp') || getLastMcpUrl())) startConnect();
   else if (!mcpAutoConnect) appendLog('info', 'MCP auto-connect skipped : another faustcode tab is open (use Connect to take the bridge)');

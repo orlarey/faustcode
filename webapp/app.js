@@ -24,15 +24,18 @@ import {
   setPlaybackAudioSession,
 } from './play-gate.js';
 import { openSharePanel } from './share-ui.js';
-import { OPEN_IN_MODULAR_EVENT } from './playground-link.js';
+import { installFaustmodularLink } from './faustmodular-link.js';
 import { showNotice } from './notice.js';
-import { clearAllDrafts, getDraft } from './drafts.js';
+import { clearAllDrafts, clearDraft, getDraft } from './drafts.js';
 import * as files from './files.js';
 import * as disk from './disk-files.js';
 import * as storesUi from './stores-ui.js';
 import { exportMathdoc } from './mathdoc-export.js';
 import { appFingerprint, exportPwa, installPwaApp } from './pwa-export.js';
 import { publishApp, publishedAppFor } from './app-publish.js';
+
+// The save of a resource of faustmodular (faustmodular-link.js sets it : setModularSave).
+let saveToModular = null;
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -1224,9 +1227,11 @@ async function submitShowcaseSession() {
   const response = await fetch('/api/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    // in the cache only : the preview of the gate is not a document (spec_documents.md)
     body: JSON.stringify({
       code: SHOWCASE_CODE,
-      filename: SHOWCASE_FILENAME
+      filename: SHOWCASE_FILENAME,
+      mode: 'cache'
     })
   });
   const result = await response.json().catch(() => ({}));
@@ -1684,17 +1689,68 @@ if (shareBtn) {
   });
 }
 
-// The session opened in faustmodular, as a module of its open document
-// (playground-link.js : added, or updated when it is linked to a module) :
-// the faustmodular button, and Export ▸ Install ▸ Add to faustmodular.
+// The resources of the scenes of faustmodular, edited here (faustmodular-link.js) :
+// a document whose origin is a resource is saved to its file.
+const modularLink = installFaustmodularLink({
+  files,
+  compile: async (code, name) => {
+    const r = await fetch('/api/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, filename: name, mode: 'cache' }) });
+    const result = await r.json().catch(() => ({}));
+    return { sha1: result.sha1, errors: r.ok ? result.errors || '' : result.error || 'compilation failed' };
+  },
+  openDocument: async (id) => {
+    if (!state.audioUnlocked) {
+      pendingDocument = id;
+      return;
+    }
+    await openFile(id);
+    if (state.currentView !== 'dsp') await switchView('dsp');
+  },
+  isModified: (id) => getDraft(`doc:${id}`) !== null,
+  reloadSaved: async (id) => {
+    clearDraft(`doc:${id}`);
+    const open = files.getOpen();
+    if (open && open.file.id === id) await openFile(id);
+  },
+  notify: showNotice,
+  confirm: (text) => window.confirm(text),
+});
+if (modularLink) setModularSave((doc, code) => modularLink.save(doc, code));
+
+// The faustmodular button, and Export ▸ Install ▸ Add to faustmodular : a document of faustmodular
+// saved ; another one sent to the last scene opened in faustmodular, as a new resource (Save as ▸
+// faustmodular).
 async function openInModular() {
-  const session = getCurrentSession();
-  if (!session || !state.currentSha) return;
-  const code = await sessionCode(state.currentSha);
-  if (code === null) throw new Error('cannot read the code of the session');
-  document.dispatchEvent(new CustomEvent(OPEN_IN_MODULAR_EVENT, {
-    detail: { sha1: state.currentSha, code, filename: files.nameForSession(session.sha1) },
-  }));
+  if (!modularLink) throw new Error('faustmodular shares the storage of the browser only when it is served by the same site');
+  const open = files.getOpen();
+  if (open && open.file.origin.kind === 'faustmodular') {
+    await saveOpenFile();
+    return;
+  }
+  const code = open ? shownText(open) ?? (await files.savedText(open.file.id)) : await sessionCode(state.currentSha);
+  if (code === null) throw new Error('cannot read the code');
+  await modularLink.saveAs(code, open ? open.file.name : files.nameForSession(state.currentSha));
+}
+
+// A resource to open once the audio gate is passed (?open=faustmodular:…, boot.js), or a document of
+// faustmodular opened meanwhile.
+let pendingResource = null;
+let pendingDocument = null;
+export function openResourceAfterGate(resource) {
+  pendingResource = resource;
+}
+
+async function openPendingResource() {
+  if (pendingResource && modularLink) {
+    const { document, file } = pendingResource;
+    pendingResource = null;
+    await modularLink.openResource(document, file);
+  } else if (pendingDocument) {
+    const id = pendingDocument;
+    pendingDocument = null;
+    await openFile(id);
+    if (state.currentView !== 'dsp') await switchView('dsp');
+  }
 }
 
 if (modularBtn) {
@@ -2037,8 +2093,6 @@ async function saveDocument(code, fallbackName = 'patch.dsp') {
   return submitCode(code, open.file.name, { keepOnError: true, fileId: open.file.id });
 }
 
-// The save of a resource of faustmodular (faustmodular-link.js sets it).
-let saveToModular = null;
 export function setModularSave(save) {
   saveToModular = save;
 }
@@ -2430,6 +2484,12 @@ async function landOnEntrySession() {
 async function landOnLastSession() {
   const lastSha = state.preBootActiveSha;
   state.preBootActiveSha = null;
+  // the document open last (documents.json : spec_documents.md)
+  const openDoc = files.getOpenFile();
+  if (openDoc && !openDoc.trashed) {
+    await openFile(openDoc.id);
+    return;
+  }
   const showcaseSha = state.showcase && state.showcase.sha;
   if (lastSha && lastSha !== showcaseSha) {
     const idx = state.sessions.findIndex((s) => s.sha1 === lastSha);
@@ -2507,6 +2567,7 @@ if (audioGateButton) {
       hideAudioGate();
       if (notice) showError(notice);
       showPendingStore();
+      await openPendingResource();
       return;
     }
     audioGateButton.disabled = true;
@@ -2521,6 +2582,7 @@ if (audioGateButton) {
       hideError();
       if (notice) showError(notice);
       showPendingStore();
+      await openPendingResource();
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       showAudioGate(message);

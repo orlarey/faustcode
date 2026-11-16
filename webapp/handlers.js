@@ -51,7 +51,6 @@ import { buildSpectrumSummary } from './spectrum.js';
 import { buildAudioMetrics } from './audio-metrics.js';
 import { buildSpectrumSeries } from './spectrum-series.js';
 import { injectLibsIntoFs, isLibFilename, LIB_INCLUDE_ARG } from './lib-inject.js';
-import { announceSubmit } from './playground-link.js';
 import { attachSubmission, libSessionsForCompile, normalizeSource } from './files.js';
 
 /**
@@ -146,11 +145,7 @@ function safeSessionName(name) {
  * scope in faustcode.
  */
 async function submit(args) {
-  // Announced with the session active before it (playground-link.js).
-  const previous = getActiveSha1();
-  const result = await compileSubmission(args);
-  announceSubmit({ sha1: result.sha1, previous, code: normalizeSource(args.code), filename: args.filename, errors: result.errors });
-  return result;
+  return compileSubmission(args);
 }
 
 async function compileSubmission(args) {

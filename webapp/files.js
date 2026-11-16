@@ -260,13 +260,13 @@ export function syncOpen(sha) {
  *     of this name, else a new one.
  * The document becomes the open one.
  */
-export function attachSubmission(sha, filename, fileId = null, { mode = 'open', code = null } = {}) {
+export function attachSubmission(sha, filename, fileId = null, { mode = 'open', code = null, origin = null } = {}) {
   if (!ready || !sha) return null;
   let doc = fileId ? index.get(fileId) : null;
   if (doc) {
     index.save(doc.id, sha);
   } else if (mode === 'new') {
-    doc = index.create(filename, sha);
+    doc = index.create(filename, sha, { origin: origin || LIBRARY });
   } else if (mode === 'submit') {
     doc = index.submit(sha, filename, openId).doc;
   } else {
