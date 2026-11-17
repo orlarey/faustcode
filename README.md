@@ -221,38 +221,45 @@ The webapp recognises these query strings :
   `--token` flag, otherwise the connection is rejected.
 - `?code=…&name=…&view=…&poly=…` — open a shared DSP (cf.
   `spec_share_url.md`).
-- `?link=modular` — this window edits the modules of the
-  [faustmodular](https://github.com/orlarey/faustmodular) (formerly FaustPlayground)
-  page that opened it (see below).
-- `?faustmodular=<url>` — the faustmodular that the faustmodular button
-  opens (default `https://orlarey.github.io/faustmodular/` ; a local one,
-  tests).
+- `?open=faustmodular:<scene>/<file>` — opens a resource of a scene of
+  [faustmodular](https://github.com/orlarey/faustmodular), as its pencil does
+  (see below).
 
 ## Edit faustmodular modules
 
-The pencil of a faustmodular module opens faustcode in a window
-reused for all the modules (`?link=modular`). The module's code
-becomes a session, shown in the dsp view once ENTER is clicked. Each
-save of that session that compiles (`Cmd/Ctrl-S` in the dsp view or the
-floating editor, or an MCP `submit` while it is active) is sent back to
-the playground, which recompiles the module in place : the sound goes
-on, the slider values and the connections are kept. A code with errors
-stays in faustcode, with its errors ; the module keeps playing its last
-valid version.
+faustcode and faustmodular are served by the same site
+(`orlarey.github.io/faustcode/` and `/faustmodular/`) : they share the
+storage of the browser. A module of a scene of faustmodular is an instance
+of a **resource** of the scene, and the code of each resource is a file,
+`faustmodular/documents/<scene>/resources/<Name>.dsp`
+(`spec_documents.md` ; `Documentation/SCENE-RESOURCES-SPEC.md` of
+faustmodular).
 
-The other way, the **faustmodular** button of the header opens the
-session in faustmodular, as a module of its open document : faustmodular
-is opened if needed (`?link=faustcode`, a window reused), or the
-faustmodular that opened faustcode is used. The session is then linked
-to the module : each save that compiles updates it, as above, and the
-button sends the new code of a linked session to its module instead of
-adding another one.
+The pencil of a module opens that file here, as a document whose origin
+is the resource : the header shows `VCO.dsp — faustmodular ▸ My scene ▸ VCO`.
+`Cmd/Ctrl-S` compiles it, writes the file (under a lock, and only if it was
+not changed in faustmodular meanwhile : else it asks before overwriting),
+and rings the channel `faustmodular-resources` : faustmodular recompiles
+every instance of the resource in place (the sound goes on ; slider values,
+connections and modulations are kept) and answers how many. A code with
+errors is not written : faustmodular keeps its version. Reloading either
+page breaks nothing ; a save while the scene is closed is read when it
+opens. A change made in faustmodular (an undo, a file dropped on the
+module) comes back here.
 
-The two pages talk with `postMessage` (they may have different
-origins) ; faustcode only accepts messages from the faustmodular window
-(the one that opened it, or the one it opened), and faustmodular only
-takes code from the official faustcode, or a local one. Protocol and
-behaviour : `spec_playground_link.md` and `webapp/playground-link.js`.
+The **faustmodular** button sends the document to the last scene opened in
+faustmodular, as a new resource with an instance (a new document, linked to
+it) ; for a document of faustmodular, it saves it. `webapp/faustmodular-link.js`.
+
+## Documents
+
+A document has a name, a saved content and one origin, where Save writes :
+the Library (the storage of the browser), a file of the disk (Chromium), or
+a resource of faustmodular. There are no versions any more : ● in the header
+tells that the text differs from the saved content, and the text not saved
+is kept for each document. The files and versions of 0.16 to 0.25 became
+documents at their current version (`files.json` is kept in `legacy/`).
+`spec_documents.md`.
 
 ## What's inside
 
