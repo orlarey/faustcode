@@ -285,6 +285,11 @@ is kept for each document. The files and versions of 0.16 to 0.25 became
 documents at their current version (`files.json` is kept in `legacy/`).
 `spec_documents.md`.
 
+A document may be open in several tabs (0.30.0) : saved in one, it is
+reloaded in the others where it is not modified ; where it is, a banner
+offers *Reload* (lose the changes made there) or *Keep mine* (the next Save
+there overwrites it).
+
 ## What's inside
 
 ```

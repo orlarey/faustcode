@@ -68,6 +68,12 @@ export function onFilesChange(cb) {
   listeners.push(cb);
 }
 
+// Called when another faustcode tab saved documents : the ids of those whose saved content changed.
+const remoteSaveListeners = [];
+export function onRemoteSave(cb) {
+  remoteSaveListeners.push(cb);
+}
+
 // The saved text of a document, kept with it (the cache of the compilations may be cleared).
 function keepSavedText(id, text) {
   if (typeof text !== 'string') return;
@@ -135,9 +141,18 @@ export async function initFiles() {
       if (!event.data || event.data.type !== 'files-changed') return;
       await refreshSessionsFromDisk();
       const fresh = await opfs.readDocumentsJson().catch(() => null);
+      const before = index;
       index = new DocumentIndex(fresh);
       if (openId && !index.get(openId)) openId = null;
       emit();
+      const saved = index.documents
+        .filter((d) => { const b = before.get(d.id); return b && b.saved !== d.saved; })
+        .map((d) => d.id);
+      if (saved.length) {
+        for (const cb of remoteSaveListeners) {
+          try { await cb(saved); } catch (err) { console.warn('[files] remote save listener failed', err); }
+        }
+      }
     });
   }
 }

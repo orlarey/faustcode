@@ -277,7 +277,7 @@ Les scénarios sont vérifiés de bout en bout avec les deux applications servie
 - [x] *Revert to saved* rend le contenu enregistré et efface ●.
 - [ ] Un `.lib` enregistré est utilisé par un `.dsp` qui l'importe ; sa copie de travail non enregistrée ne l'est pas.
 - [ ] Le même `?code=` ouvert deux fois n'ouvre qu'un document.
-- [ ] Deux onglets : Enregistrer dans l'un recharge l'autre ; avec des modifications dans l'autre, le bandeau apparaît.
+- [x] Deux onglets : Enregistrer dans l'un recharge l'autre ; avec des modifications dans l'autre, le bandeau apparaît.
 
 **faustmodular** (avec faustcode servi sous `/faustcode/` du serveur de faustmodular ; les scénarios de `SCENE-RESOURCES-SPEC.md`)
 

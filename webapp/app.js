@@ -2225,6 +2225,31 @@ function showBanner(message, choices, done = () => {}) {
   return el;
 }
 
+// The open document saved in another tab of faustcode (spec_documents.md, « Onglets ») : reloaded here if it is
+// not modified ; else a banner, Reload or Keep mine (the next Save here overwrites it).
+let tabBanner = null;
+files.onRemoteSave(async (ids) => {
+  const open = files.getOpen();
+  if (!open || !ids.includes(open.file.id)) return;
+  const id = open.file.id;
+  const reload = async () => {
+    const now = files.getOpen();
+    if (!now || now.file.id !== id) return;
+    await openFile(id);
+    await showSavedContent(files.getOpen());
+  };
+  if (tabBanner) { tabBanner.remove(); tabBanner = null; }
+  if (!isModified(open)) {
+    await reload();
+    showNotice(`${open.file.name} was saved in another tab : reloaded.`, 4000);
+    return;
+  }
+  tabBanner = showBanner(`${open.file.name} was saved in another tab, and you have unsaved changes here.`, [
+    { label: 'Reload', title: 'Your unsaved changes here are lost', action: reload },
+    { label: 'Keep mine', title: 'The next Save here overwrites it', action: () => {} },
+  ], () => { tabBanner = null; });
+});
+
 window.addEventListener('focus', () => { void checkDiskChange(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void checkDiskChange(); });
 
