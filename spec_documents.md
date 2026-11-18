@@ -274,7 +274,7 @@ Les scénarios sont vérifiés de bout en bout avec les deux applications servie
 - [ ] Nouveau, trois frappes, rechargement : le document revient avec sa copie de travail et ●.
 - [ ] Enregistrer un code avec erreurs dans la Bibliothèque : écrit, erreurs à leur ligne, la vue Run joue encore l'ancienne version.
 - [ ] *Save as…* dans la Bibliothèque : un nouveau document ; l'original est propre et inchangé.
-- [ ] *Revert to saved* rend le contenu enregistré et efface ●.
+- [x] *Revert to saved* rend le contenu enregistré et efface ●.
 - [ ] Un `.lib` enregistré est utilisé par un `.dsp` qui l'importe ; sa copie de travail non enregistrée ne l'est pas.
 - [ ] Le même `?code=` ouvert deux fois n'ouvre qu'un document.
 - [ ] Deux onglets : Enregistrer dans l'un recharge l'autre ; avec des modifications dans l'autre, le bandeau apparaît.
@@ -290,7 +290,7 @@ Les scénarios sont vérifiés de bout en bout avec les deux applications servie
 - [ ] Écriture concurrente : le fichier a changé depuis la lecture, faustcode n'écrit pas et propose *Recharger* ou *Écraser*.
 - [ ] Ressource renommée : l'origine suit. Ressource retirée : le bandeau sans origine.
 - [ ] *Save as… ▸ faustmodular* : une ressource et une instance dans la scène ouverte, un nouveau document lié ; l'original est inchangé.
-- [ ] La boîte *Ouvrir* ▸ faustmodular liste les scènes et leurs ressources.
+- [x] La boîte *Ouvrir* ▸ faustmodular liste les scènes et leurs ressources.
 
 **Disque, magasins, MCP, migration**
 

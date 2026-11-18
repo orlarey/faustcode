@@ -1428,3 +1428,122 @@ button.store-badge:hover:not(.error) {
   font-size: 0.78rem;
   line-height: 1.5;
 }
+
+/* Open… (open-dialog.js, spec_documents.md « La boîte Ouvrir ») : the volumes, then their content. */
+.open-dialog {
+  width: min(760px, 100%);
+  height: min(560px, calc(100vh - 100px));
+}
+
+.open-dialog-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 150px 1fr;
+}
+
+.open-volumes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.6rem 0.4rem;
+  border-right: 1px solid rgba(147, 200, 220, 0.2);
+}
+
+.open-volume {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #b9d3dc;
+  text-align: left;
+  padding: 0.42rem 0.6rem;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.open-volume:hover {
+  background: rgba(147, 200, 220, 0.12);
+}
+
+.open-volume.active {
+  background: rgba(147, 200, 220, 0.2);
+  color: #e6f4f9;
+  font-weight: 600;
+}
+
+.open-content {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.6rem 0.8rem;
+}
+
+.open-crumbs {
+  font-size: 0.74rem;
+  color: #9fb3bb;
+}
+
+.open-crumb {
+  border: 0;
+  background: transparent;
+  color: #b9d3dc;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.open-crumb:hover {
+  text-decoration: underline;
+}
+
+.open-crumb-current {
+  color: #e6f4f9;
+}
+
+.open-search {
+  flex: 0 0 auto;
+}
+
+.open-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.open-row.active .store-module-name {
+  color: #9ff1c9;
+}
+
+.open-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(147, 200, 220, 0.15);
+}
+
+.open-actions.hidden {
+  display: none;
+}
+
+.open-actions .store-panel-note {
+  flex-basis: 100%;
+}
+
+@media (max-width: 560px) {
+  .open-dialog-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .open-volumes {
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: 0;
+    border-bottom: 1px solid rgba(147, 200, 220, 0.2);
+  }
+}

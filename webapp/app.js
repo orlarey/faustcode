@@ -24,7 +24,8 @@ import {
   setPlaybackAudioSession,
 } from './play-gate.js';
 import { openSharePanel } from './share-ui.js';
-import { installFaustmodularLink } from './faustmodular-link.js';
+import { installFaustmodularLink, listScenes, listResources } from './faustmodular-link.js';
+import { openOpenDialog, closeOpenDialog, startOf } from './open-dialog.js';
 import { showNotice } from './notice.js';
 import { clearAllDrafts, clearDraft, getDraft } from './drafts.js';
 import * as files from './files.js';
@@ -1048,7 +1049,7 @@ function updateSessionNavigation({ sync = true } = {}) {
 
   if (!session) {
     sessionLabel.textContent = 'No file | File ▸ New file, or drop a .dsp';
-    sessionLabel.title = 'All files';
+    sessionLabel.title = 'Open… : the documents';
     sessionLabel.classList.add('clickable');
     sessionPrev.disabled = true;
     sessionNext.disabled = true;
@@ -1920,7 +1921,8 @@ function tickRunUsageScore() {
 sessionLabel.addEventListener('click', (event) => {
   event.preventDefault();
   if (state.sessions.length === 0) return;
-  toggleSessionPicker();
+  const open = files.getOpen();
+  showOpen(open ? startOf(open.file.origin) : null);
 });
 
 viewSelect.addEventListener('change', (e) => {
@@ -2170,15 +2172,78 @@ function renameOpenFile() {
   }
 }
 
-/** Move to trash : the open file goes to the trash (restorable from All files…), the last saved file opens. */
+/** Move to trash : the open file goes to the trash (restorable from Open… ▸ Library), the last saved file opens. */
 async function trashOpenFile() {
   const open = files.getOpen();
   if (!open) return;
   files.trashFile(open.file.id);
-  showNotice(`${open.file.name} moved to the trash (All files… to restore it).`);
+  showNotice(`${open.file.name} moved to the trash (Open… ▸ Library to restore it).`);
   const next = orderedFiles()[0];
   if (next) await openFile(next.id);
   else await loadEmptySession();
+}
+
+/** Whether the working copy of a document differs from its saved content (●). */
+function isModified(open = files.getOpen()) {
+  if (!open) return false;
+  const dspView = state.views.find((v) => v.id === 'dsp');
+  return getDraft(draftKey(open)) !== null
+    || (state.currentView === 'dsp' && !!dspView && typeof dspView.getPendingCode === 'function' && dspView.getPendingCode() !== null);
+}
+
+/** Revert to saved (spec_documents.md) : the working copy replaced by the saved content, ● cleared. */
+async function revertOpenFile() {
+  const open = files.getOpen();
+  if (!open || !isModified(open)) return;
+  if (!window.confirm(`Revert ${open.file.name} to its saved content ?\nYour unsaved changes are lost.`)) return;
+  const key = draftKey(open);
+  clearDraft(key);
+  const text = (await files.savedText(open.file.id)) ?? (await sessionCode(open.sha)) ?? '';
+  const bus = typeof window !== 'undefined' ? window.__faustEditorBus : null;
+  if (bus) bus.loadSession(text, key);
+  renderFileLabel();
+  showNotice(`${open.file.name} : back to its saved content.`, 3000);
+}
+
+// Open… (open-dialog.js) : the volumes of the documents.
+let storesListener = null;
+storesUi.stores.onChange(() => { if (storesListener) storesListener(); });
+
+function showOpen(start = null) {
+  closeSessionPicker();
+  closeFileMenu();
+  openOpenDialog({
+    documents: () => [...files.listFiles(), ...files.listTrash()],
+    openId: () => { const o = files.getOpen(); return o ? o.file.id : null; },
+    openDocument: (id) => openFile(id),
+    restore: (id) => files.restoreFile(id),
+    emptyTrash: async () => {
+      const count = files.listTrash().length;
+      if (!count || !window.confirm(`Delete the ${count === 1 ? 'document' : `${count} documents`} of the trash ?\nThis cannot be undone.`)) return;
+      await files.emptyTrash();
+      await loadSessions();
+    },
+    openDevice: () => openFromDisk(),
+    diskAccess: disk.hasFileAccess(),
+    stores: () => storesUi.stores.list().map((st) => ({
+      key: st.key,
+      status: st.status,
+      error: st.error,
+      name: st.store ? st.store.manifest.name || '' : '',
+      modules: st.store ? st.store.index.modules : null,
+    })),
+    onStoresChange: (cb) => { storesListener = cb; return () => { if (storesListener === cb) storesListener = null; }; },
+    openModule: (key, module) => openFromStore({ store: key, path: module.path }),
+    manageStores: () => storesUi.openStoresPanel({ open: (key) => showOpen({ volume: 'stores', store: key }) }),
+    storeError: (st) => storesUi.storeErrorText({ reason: st.error }),
+    modular: modularLink ? {
+      scenes: () => listScenes(),
+      resources: (id) => listResources(id),
+      documentFor: (document, file) => files.byOrigin({ kind: 'faustmodular', document, file }),
+      open: (document, file) => modularLink.openResource(document, file),
+    } : null,
+    modularUnavailable: 'faustmodular shares the storage of the browser only when it is served by the same site as faustcode (orlarey.github.io).',
+  }, start);
 }
 
 async function newFile() {
@@ -2193,11 +2258,9 @@ async function newFile() {
   }
 }
 
-/** The modules of a followed store ; one picked opens as a file linked to the store. */
+/** The modules of a followed store (Open… ▸ Stores ▸ the store) ; one picked opens as a document with its provenance. */
 function showStoreModules(key) {
-  storesUi.openStoreModules(key, {
-    pick: (state, module) => openFromStore({ store: state.key, path: module.path }),
-  });
+  showOpen({ volume: 'stores', store: key });
 }
 
 /** Opens a module of a store (or any .dsp of GitHub) as a file of faustcode. */
@@ -2289,21 +2352,17 @@ function openFileMenu() {
   const recent = orderedFiles().slice().sort((a, b) => b.modified - a.modified).slice(0, 8);
   const items = [
     { label: 'New file', action: newFile },
-    { label: 'Open…', key: k('O'), action: openFromDisk },
-    { label: 'All files…', action: () => openSessionPicker() },
-    { label: 'Stores…', action: () => storesUi.openStoresPanel({ open: showStoreModules }) },
-    ...(storesUi.stores.list().length ? [{ separator: true, title: 'Open from a store' }] : []),
-    ...storesUi.stores.list().map((st) => ({
-      label: st.key, recent: true, disabled: st.status !== 'ready',
-      action: () => showStoreModules(st.key),
-    })),
+    { label: 'Open…', key: k('O'), action: () => showOpen() },
     { separator: true, title: recent.length ? 'Recent files' : '' },
     ...recent.map((f) => ({ label: f.name, recent: true, checked: !!open && open.file.id === f.id, action: () => openFile(f.id) })),
     { separator: true },
     { label: 'Save', key: k('S'), action: saveOpenFile, disabled: !open },
     { label: 'Save as…', key: k('S', true), action: saveOpenFileAs, disabled: !open },
+    { label: 'Revert to saved', action: revertOpenFile, disabled: !open || !isModified(open) },
     { label: 'Rename…', action: renameOpenFile, disabled: !open },
-    { label: 'Move to trash', action: trashOpenFile, disabled: !open },
+    { label: 'Move to trash', action: trashOpenFile, disabled: !open || open.file.origin.kind !== 'library' },
+    { separator: true },
+    { label: 'Stores…', action: () => storesUi.openStoresPanel({ open: (key) => showOpen({ volume: 'stores', store: key }) }) },
   ];
   const menu = document.createElement('div');
   menu.className = 'file-menu';
@@ -2364,7 +2423,7 @@ document.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
   if (key === 'o' && !e.shiftKey) {
     e.preventDefault();
-    void openFromDisk();
+    showOpen();
   } else if (key === 's' && e.shiftKey) {
     e.preventDefault();
     void saveOpenFileAs();

@@ -47,19 +47,20 @@ don't have to fight Chrome's ES module cache while iterating.
   keystroke by keystroke (and vice-versa) when both are visible, so you
   can iterate on the code while watching the Run view update underneath
   at every `Cmd/Ctrl-S`.
-- **Files** (0.16.0, `spec_files_store.md`) : the **File** menu has New
-  file, Open… (`Cmd/Ctrl-O`), All files… (search, trash), the recent
-  files, Save (`Cmd/Ctrl-S`), Save as… (`Shift-Cmd/Ctrl-S`), Rename… and
-  Move to trash. A file is a name and its versions : each save adds one,
-  the header shows `Wahoo.dsp ● · v3/5` (● : unsaved changes) and ◀ ▶
-  step through the versions. In Chromium, a file opened from the disk is
-  written back there by Save. Submitting a code under the name of a file
-  (drop, MCP `submit`) makes a new version of it.
+- **Files** (`spec_documents.md`) : the **File** menu has New file,
+  Open… (`Cmd/Ctrl-O`), the recent documents, Save (`Cmd/Ctrl-S`), Save
+  as… (`Shift-Cmd/Ctrl-S`), Revert to saved, Rename…, Move to trash and
+  Stores…. **Open…** (0.27.0) is one dialog over the volumes : the
+  Library (the documents of the browser, searched, and the trash), the
+  Disk (Open a file of the device… ; in Chromium, Save writes it back),
+  the Stores (their modules, searched) and faustmodular (its scenes, then
+  their resources). A click on the origin in the header opens it where the
+  document is. **Revert to saved** drops the working copy (●).
 - **Stores** (0.17.0, `spec_files_store.md`) : GitHub repositories of
   Faust modules and scenes, the same as in faustmodular (same browser,
   same list : a store followed in one is followed in the other). File ▸
-  Stores… follows one ; File ▸ Open from a store lists its modules, and
-  one opens as a file linked to the store. A link opens any `.dsp` of
+  Stores… follows one ; Open… ▸ Stores lists its modules, and one opens
+  as a document with its provenance. A link opens any `.dsp` of
   GitHub : `?file=<its address on GitHub>` (or `?store=owner/repo&file=
   <path>&ref=<commit>`) ; `?store=owner/repo` shows the modules of a
   store. Export ▸ Share offers the link of the store (short, at the commit read)
@@ -246,6 +247,9 @@ errors is not written : faustmodular keeps its version. Reloading either
 page breaks nothing ; a save while the scene is closed is read when it
 opens. A change made in faustmodular (an undo, a file dropped on the
 module) comes back here.
+
+Open… ▸ faustmodular lists the scenes and their resources, and opens one the
+same way.
 
 The **faustmodular** button sends the document to the last scene opened in
 faustmodular, as a new resource with an instance (a new document, linked to
