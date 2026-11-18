@@ -3,8 +3,9 @@
 //
 //   Library       the documents of the browser (origin Library), searched, the
 //                 last saved first ; the Trash (restore, empty)
-//   Disk          the documents of a file of the device, and « Open a file of
-//                 the device… »
+//   Disk          the mounted folders (browsed : their sub-folders, their .dsp
+//                 and .lib), the documents of a file of the device opened
+//                 alone ; « Mount a folder… », « Open a file of the device… »
 //   Stores        the followed stores, then their modules (searched)
 //   faustmodular  the scenes (not those in its trash), then their resources ;
 //                 absent features are said, not hidden, when faustmodular does
@@ -30,10 +31,10 @@ export function matches(text, query) {
   return words.every((w) => t.includes(w));
 }
 
-/** The documents of a volume ('library' or 'disk'), matching the query, the last saved first. */
+/** The documents of a volume ('library' or 'disk' : the files opened alone), matching the query, the last saved first. */
 export function documentsOf(volume, docs, query = '') {
   return docs
-    .filter((d) => !d.trashed && (d.origin && d.origin.kind ? d.origin.kind : 'library') === volume)
+    .filter((d) => !d.trashed && (d.origin && d.origin.kind ? d.origin.kind : 'library') === volume && !(d.origin && d.origin.mount))
     .filter((d) => matches(`${d.name} ${d.origin && d.origin.file ? d.origin.file : ''}`, query))
     .sort((a, b) => (b.modified || 0) - (a.modified || 0));
 }
@@ -49,6 +50,9 @@ export function modulesOf(modules, query = '') {
 export function startOf(origin) {
   const kind = origin && origin.kind;
   if (kind === 'faustmodular') return { volume: 'faustmodular', scene: { id: origin.document, name: origin.scene || 'scene' } };
+  if (kind === 'disk' && origin.mount && typeof origin.path === 'string') {
+    return { volume: 'disk', mount: { id: origin.mount, name: origin.folder || 'folder' }, dirs: origin.path.split('/').slice(0, -1) };
+  }
   if (kind === 'disk') return { volume: 'disk' };
   return { volume: 'library' };
 }
@@ -76,6 +80,8 @@ export function isOpenDialogShown() {
  *   restore(id), emptyTrash()  the Trash (emptyTrash asks first, resolves when done)
  *   openDevice()            Open a file of the device…
  *   diskAccess              whether files of the disk are written in place (Chromium)
+ *   disk                    the mounted folders : { folderAccess, mounts(), list(mountId, dirs),
+ *                           mount(), unmount(mountId), documentFor(mountId, path), open(mountId, path, folder) }
  *   stores()                the followed stores : [{ key, status, error, modules, name }]
  *   onStoresChange(cb)      returns a function that stops it
  *   openModule(key, module) opens a module of a store
@@ -88,7 +94,7 @@ export function isOpenDialogShown() {
  */
 export function openOpenDialog(host, start = null) {
   closeOpenDialog();
-  const at = { volume: 'library', store: null, scene: null, ...(start || last) };
+  const at = { volume: 'library', store: null, scene: null, mount: null, dirs: [], ...(start || last) };
   const el = document.createElement('div');
   el.className = 'store-panel-backdrop open-dialog-backdrop';
   el.innerHTML = `
@@ -118,9 +124,12 @@ export function openOpenDialog(host, start = null) {
   el.querySelector('.store-panel-close').addEventListener('click', close);
   el.addEventListener('click', (e) => { if (e.target === el) close(); });
 
+  const remember = () => {
+    last = { volume: at.volume, ...(at.scene ? { scene: at.scene } : {}), ...(at.mount ? { mount: at.mount, dirs: at.dirs.slice() } : {}) };
+  };
   const go = (place) => {
-    Object.assign(at, { store: null, scene: null }, place);
-    last = { volume: at.volume, ...(at.scene ? { scene: at.scene } : {}) };
+    Object.assign(at, { store: null, scene: null, mount: null, dirs: [] }, place);
+    remember();
     search.value = '';
     void render();
     search.focus();
@@ -169,22 +178,33 @@ export function openOpenDialog(host, start = null) {
     }
   }
 
+  // The place as crumbs : each one but the last goes there.
   function renderCrumbs() {
     crumbsEl.innerHTML = '';
     const v = VOLUMES.find((x) => x.id === at.volume);
-    const up = document.createElement('button');
-    up.type = 'button';
-    up.className = 'open-crumb';
-    up.textContent = v.label;
-    up.addEventListener('click', () => go({ volume: at.volume }));
-    crumbsEl.appendChild(up);
-    const sub = at.store || (at.scene && at.scene.name);
-    if (sub) {
-      const s = document.createElement('span');
-      s.className = 'open-crumb-current';
-      s.textContent = ` ▸ ${sub}`;
-      crumbsEl.appendChild(s);
+    const crumbs = [{ label: v.label, place: { volume: at.volume } }];
+    if (at.store) crumbs.push({ label: at.store });
+    if (at.scene) crumbs.push({ label: at.scene.name });
+    if (at.mount) {
+      crumbs.push({ label: at.mount.name, place: { volume: 'disk', mount: at.mount, dirs: [] } });
+      at.dirs.forEach((d, i) => crumbs.push({ label: d, place: { volume: 'disk', mount: at.mount, dirs: at.dirs.slice(0, i + 1) } }));
     }
+    crumbs.forEach((c, i) => {
+      if (i) crumbsEl.appendChild(document.createTextNode(' ▸ '));
+      if (i < crumbs.length - 1 && c.place) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'open-crumb';
+        b.textContent = c.label;
+        b.addEventListener('click', () => go(c.place));
+        crumbsEl.appendChild(b);
+      } else {
+        const span = document.createElement('span');
+        span.className = i ? 'open-crumb-current' : 'open-crumb-volume';
+        span.textContent = c.label;
+        crumbsEl.appendChild(span);
+      }
+    });
   }
 
   async function render() {
@@ -197,7 +217,47 @@ export function openOpenDialog(host, start = null) {
     let note = null;
     const openId = host.openId();
 
-    if (at.volume === 'library' || at.volume === 'disk') {
+    if (at.volume === 'disk' && at.mount) {
+      search.placeholder = `Search ${at.dirs.length ? at.dirs[at.dirs.length - 1] : at.mount.name}`;
+      listEl.innerHTML = '';
+      listEl.appendChild(empty('Reading…'));
+      let content = null;
+      let failure = null;
+      try {
+        content = await host.disk.list(at.mount.id, at.dirs);
+      } catch (err) {
+        failure = err;
+      }
+      if (token !== renderToken) return;
+      if (failure) {
+        rows.push(empty(failure.message || String(failure)));
+        if (failure.permission) {
+          rows.push(row({ name: `Allow faustcode to read ${at.mount.name}`, meta: 'the browser asks again after a reload', onOpen: () => void render() }));
+        }
+      } else {
+        for (const f of content.folders.filter((x) => matches(x, q))) {
+          rows.push(row({ name: `${f}/`, meta: 'folder', onOpen: () => go({ volume: 'disk', mount: at.mount, dirs: [...at.dirs, f] }) }));
+        }
+        for (const f of content.files.filter((x) => matches(x, q))) {
+          const path = [...at.dirs, f].join('/');
+          const doc = host.disk.documentFor(at.mount.id, path);
+          rows.push(row({
+            name: f,
+            meta: doc ? 'a document here' : '',
+            active: !!doc && doc.id === openId,
+            onOpen: opened(() => host.disk.open(at.mount.id, path, at.mount.name)),
+          }));
+        }
+        if (!content.folders.length && !content.files.length) rows.push(empty('No folder, no .dsp or .lib here.'));
+        else if (!rows.length) rows.push(empty('Nothing matching.'));
+      }
+      if (!at.dirs.length) {
+        actions.push(action(`Unmount ${at.mount.name}`, async () => {
+          if (await host.disk.unmount(at.mount.id)) go({ volume: 'disk' });
+        }));
+      }
+      note = 'Files open in place : Save writes them. The .lib of a document\'s folder serve it first.';
+    } else if (at.volume === 'library' || at.volume === 'disk') {
       search.placeholder = 'Search documents';
       const all = host.documents();
       const docs = documentsOf(at.volume, all, q);
@@ -213,13 +273,31 @@ export function openOpenDialog(host, start = null) {
       if (!docs.length) {
         rows.push(empty(q ? 'No matching document.'
           : at.volume === 'library' ? 'No document yet : File ▸ New file, or drop a .dsp on the page.'
-            : 'No file of the device opened yet.'));
+            : 'No folder mounted, no file of the device opened yet.'));
       }
       if (at.volume === 'library') {
         const trash = all.filter((d) => d.trashed && matches(d.name, q));
         if (trash.length) rows.push(trashSection(trash));
       } else {
-        actions.push(action('Open a file of the device…', opened(() => host.openDevice()), true));
+        const mounts = host.disk ? await host.disk.mounts() : [];
+        if (token !== renderToken) return;
+        const folderRows = mounts.filter((m) => matches(m.name, q)).map((m) => row({
+          name: `${m.name}/`,
+          meta: 'mounted folder',
+          onOpen: () => go({ volume: 'disk', mount: m, dirs: [] }),
+        }));
+        if (folderRows.length) {
+          // the folders first ; the empty line of the files opened alone only if nothing else
+          const filesEmpty = !docs.length;
+          rows.splice(0, filesEmpty ? rows.length : 0, ...folderRows);
+        }
+        if (host.disk && host.disk.folderAccess) {
+          actions.push(action('Mount a folder…', async () => {
+            const m = await host.disk.mount();
+            if (m) go({ volume: 'disk', mount: m, dirs: [] });
+          }, true));
+        }
+        actions.push(action('Open a file of the device…', opened(() => host.openDevice()), !(host.disk && host.disk.folderAccess)));
         note = host.diskAccess
           ? 'Saved in place : Save writes the file of the device.'
           : 'This browser cannot write the files of the device : a file opened is copied to the Library, and Save as… downloads it.';
@@ -347,16 +425,17 @@ export function openOpenDialog(host, start = null) {
       e.preventDefault();
       const first = listEl.querySelector('.open-row');
       if (first && first.open) first.open();
-    } else if (e.key === 'Backspace' && e.target === search && !search.value && (at.store || at.scene)) {
+    } else if (e.key === 'Backspace' && e.target === search && !search.value && (at.store || at.scene || at.mount)) {
       e.preventDefault();
-      go({ volume: at.volume });
+      if (at.mount && at.dirs.length) go({ volume: 'disk', mount: at.mount, dirs: at.dirs.slice(0, -1) });
+      else go({ volume: at.volume });
     }
   };
   document.addEventListener('keydown', onKey, true);
   document.body.appendChild(el);
   const unsubscribe = host.onStoresChange ? host.onStoresChange(() => { if (at.volume === 'stores') void render(); }) : null;
   current = { el, onKey, unsubscribe };
-  last = { volume: at.volume, ...(at.scene ? { scene: at.scene } : {}) };
+  remember();
   void render();
   search.focus();
 }

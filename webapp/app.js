@@ -482,6 +482,7 @@ function orderedFiles() {
 
 /** Opens a document : the compilation of its saved content (compiled again from its text if the cache lost it). */
 async function openFile(id) {
+  await refreshFolderLibs(files.getFile(id));
   const sha = files.setOpen(id);
   if (!sha) return;
   if (!state.sessions.some((s) => s.sha1 === sha)) await loadSessions();
@@ -2074,14 +2075,158 @@ async function sessionCode(sha) {
 
 /** Writes the file of the disk of a file, if it has one (Chromium). */
 async function writeDisk(fileId, text) {
-  if (!disk.hasFileAccess() || typeof text !== 'string') return;
+  if (!disk.hasFileAccess() || typeof text !== 'string') return true;
   try {
+    // written only if the file is still the one read (D6) : else asked
+    const known = diskStamps.get(fileId);
+    const now = await disk.stampOf(fileId);
+    if (known && now && now !== known) {
+      const doc = files.getFile(fileId);
+      if (!window.confirm(`${doc ? doc.name : 'The file'} was changed on the disk since it was opened.\nOverwrite it with your text ?`)) return false;
+    }
     const name = await disk.writeIfHandle(fileId, text);
-    if (name) showNotice(`Saved to ${name}`, 2500);
+    if (name) {
+      const stamp = await disk.stampOf(fileId);
+      if (stamp) diskStamps.set(fileId, stamp);
+      showNotice(`Saved to ${name}`, 2500);
+    }
   } catch (err) {
     showNotice(`Not written to the disk : ${err && err.message ? err.message : err}`, 8000);
   }
+  return true;
 }
+
+// ---------------------------------------------------------------------
+// The disk (spec_documents.md, « Disque ») : mounted folders, files changed outside
+// ---------------------------------------------------------------------
+
+// The date of the file of a document of the disk, when it was read or written here.
+const diskStamps = new Map();
+
+/** The .lib of the folder of a document of a mounted folder, given to the compiler first ; none for another. */
+async function refreshFolderLibs(doc) {
+  const o = doc && doc.origin;
+  if (o && o.kind === 'disk' && o.mount && o.path) {
+    files.setFolderLibs(await disk.folderLibs(o.mount, o.path.split('/').slice(0, -1)));
+  } else {
+    files.setFolderLibs([]);
+  }
+}
+
+/** Compiles a text without opening it : its sha1 and errors (the cache of the compilations). */
+async function compileOnly(code, name) {
+  const r = await fetch('/api/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, filename: name, mode: 'cache' }) });
+  const result = await r.json().catch(() => ({}));
+  return { sha1: result.sha1, errors: r.ok ? result.errors || '' : result.error || 'compilation failed' };
+}
+
+/** Opens a file of a mounted folder, in place : the document of this file, created the first time. */
+async function openMountedFile(mountId, path, folder) {
+  showLoading();
+  hideError();
+  try {
+    const handle = await disk.fileOfMount(mountId, path);
+    const file = await handle.getFile();
+    const text = await file.text();
+    const name = path.split('/').pop();
+    const origin = { kind: 'disk', file: name, mount: mountId, folder, path };
+    files.setFolderLibs(await disk.folderLibs(mountId, path.split('/').slice(0, -1)));
+    const { sha1, errors } = await compileOnly(text, name);
+    if (!sha1) throw new Error(errors || 'cannot read it');
+    let doc = files.byOrigin(origin);
+    if (!doc) {
+      doc = files.createFile(name, sha1, { origin, code: text });
+    } else if (doc.saved !== sha1 && getDraft(`doc:${doc.id}`) === null) {
+      files.setSaved(doc.id, sha1, text);
+    }
+    await disk.setHandle(doc.id, handle);
+    diskStamps.set(doc.id, file.lastModified);
+    await openFile(doc.id);
+    if (state.currentView !== 'dsp' && /\.lib$/i.test(name)) await switchView('dsp');
+    if (errors && String(errors).trim()) showNotice(`${name} does not compile : ${String(errors).split('\n')[0]}`, 8000);
+  } catch (err) {
+    showError(`Open : ${err && err.message ? err.message : err}`);
+  } finally {
+    hideLoading();
+  }
+}
+
+/** The editors show the saved content of the open document again (Revert, a file reloaded). */
+async function showSavedContent(open) {
+  const key = draftKey(open);
+  clearDraft(key);
+  const text = (await files.savedText(open.file.id)) ?? (await sessionCode(open.sha)) ?? '';
+  const bus = typeof window !== 'undefined' ? window.__faustEditorBus : null;
+  if (bus) bus.loadSession(text, key);
+  renderFileLabel();
+}
+
+/** The file of the open document of the disk changed outside (an editor, git…) : reloaded, or asked. */
+let diskBanner = null;
+async function checkDiskChange() {
+  const open = files.getOpen();
+  if (!open || open.file.origin.kind !== 'disk' || diskBanner) return;
+  const id = open.file.id;
+  const read = await disk.readIfHandle(id);
+  if (!read) return;
+  const known = diskStamps.get(id);
+  if (!known) { diskStamps.set(id, read.lastModified); return; }
+  if (read.lastModified === known) return;
+  const saved = await files.savedText(id);
+  if (saved !== null && files.normalizeSource(read.text) === files.normalizeSource(saved)) {
+    diskStamps.set(id, read.lastModified);
+    return;
+  }
+  const reload = async () => {
+    await refreshFolderLibs(open.file);
+    const { sha1 } = await compileOnly(read.text, open.file.name);
+    if (!sha1) return;
+    diskStamps.set(id, read.lastModified);
+    files.setSaved(id, sha1, read.text);
+    const now = files.getOpen();
+    if (now && now.file.id === id) {
+      await openFile(id);
+      await showSavedContent(files.getOpen());
+    }
+  };
+  if (!isModified(open)) {
+    await reload();
+    showNotice(`${open.file.name} changed on the disk : reloaded.`, 4000);
+    return;
+  }
+  diskBanner = showBanner(`${open.file.name} changed on the disk, and you have unsaved changes.`, [
+    { label: 'Reload', title: 'Your unsaved changes are lost', action: reload },
+    { label: 'Keep mine', title: 'The next Save overwrites the file', action: () => { diskStamps.set(id, read.lastModified); } },
+  ], () => { diskBanner = null; });
+}
+
+/** A banner at the top of the page : a message and its choices ; `done` when it goes. */
+function showBanner(message, choices, done = () => {}) {
+  const el = document.createElement('div');
+  el.className = 'app-banner';
+  el.setAttribute('role', 'alert');
+  const text = document.createElement('span');
+  text.textContent = message;
+  el.appendChild(text);
+  for (const c of choices) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'primary-btn';
+    b.textContent = c.label;
+    if (c.title) b.title = c.title;
+    b.addEventListener('click', async () => {
+      el.remove();
+      done();
+      await c.action();
+    });
+    el.appendChild(b);
+  }
+  document.body.appendChild(el);
+  return el;
+}
+
+window.addEventListener('focus', () => { void checkDiskChange(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void checkDiskChange(); });
 
 /**
  * Save (spec_documents.md, « Enregistrer et compiler ») : the text compiled, then written to the
@@ -2092,7 +2237,10 @@ async function saveDocument(code, fallbackName = 'patch.dsp') {
   const open = files.getOpen();
   if (!open) return submitCode(code, fallbackName, { keepOnError: true });
   if (open.file.origin.kind === 'faustmodular' && saveToModular) return saveToModular(open.file, code);
-  if (open.file.origin.kind === 'disk') await writeDisk(open.file.id, code);
+  if (open.file.origin.kind === 'disk') {
+    await refreshFolderLibs(open.file);
+    if (!(await writeDisk(open.file.id, code))) return false;
+  }
   return submitCode(code, open.file.name, { keepOnError: true, fileId: open.file.id });
 }
 
@@ -2154,7 +2302,11 @@ async function openFromDisk() {
     const picked = await disk.pickOpen();
     if (!picked) return;
     if (await submitCode(picked.text, picked.name)) {
-      if (state.lastSubmit && state.lastSubmit.fileId) await disk.setHandle(state.lastSubmit.fileId, picked.handle);
+      if (state.lastSubmit && state.lastSubmit.fileId) {
+        await disk.setHandle(state.lastSubmit.fileId, picked.handle);
+        const stamp = await disk.stampOf(state.lastSubmit.fileId);
+        if (stamp) diskStamps.set(state.lastSubmit.fileId, stamp);
+      }
     }
   } catch (err) {
     showError(`Open : ${err && err.message ? err.message : err}`);
@@ -2197,12 +2349,7 @@ async function revertOpenFile() {
   const open = files.getOpen();
   if (!open || !isModified(open)) return;
   if (!window.confirm(`Revert ${open.file.name} to its saved content ?\nYour unsaved changes are lost.`)) return;
-  const key = draftKey(open);
-  clearDraft(key);
-  const text = (await files.savedText(open.file.id)) ?? (await sessionCode(open.sha)) ?? '';
-  const bus = typeof window !== 'undefined' ? window.__faustEditorBus : null;
-  if (bus) bus.loadSession(text, key);
-  renderFileLabel();
+  await showSavedContent(open);
   showNotice(`${open.file.name} : back to its saved content.`, 3000);
 }
 
@@ -2226,6 +2373,30 @@ function showOpen(start = null) {
     },
     openDevice: () => openFromDisk(),
     diskAccess: disk.hasFileAccess(),
+    disk: {
+      folderAccess: disk.hasFolderAccess(),
+      mounts: () => disk.listMounts(),
+      list: (mountId, dirs) => disk.listFolder(mountId, dirs),
+      mount: async () => {
+        try {
+          return await disk.mountFolder();
+        } catch (err) {
+          showError(`Mount a folder : ${err && err.message ? err.message : err}`);
+          return null;
+        }
+      },
+      unmount: async (mountId) => {
+        const open = files.getOpen();
+        if (open && open.file.origin.kind === 'disk' && open.file.origin.mount === mountId) {
+          showNotice(`${open.file.name} is open from this folder : open another document first.`, 6000);
+          return false;
+        }
+        await disk.unmountFolder(mountId);
+        return true;
+      },
+      documentFor: (mountId, path) => files.byOrigin({ kind: 'disk', mount: mountId, path }),
+      open: (mountId, path, folder) => openMountedFile(mountId, path, folder),
+    },
     stores: () => storesUi.stores.list().map((st) => ({
       key: st.key,
       status: st.status,

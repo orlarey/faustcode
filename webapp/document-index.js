@@ -66,7 +66,16 @@ export const LIBRARY = Object.freeze({ kind: 'library' });
 /** An origin read back, checked ; the Library if unusable. */
 export function parseOrigin(o) {
   if (o && typeof o === 'object') {
-    if (o.kind === 'disk') return { kind: 'disk', ...(typeof o.file === 'string' ? { file: o.file } : {}) };
+    if (o.kind === 'disk') {
+      const out = { kind: 'disk', ...(typeof o.file === 'string' ? { file: o.file } : {}) };
+      // a file of a mounted folder : the folder (its id, its name) and its path in it
+      if (typeof o.mount === 'string' && o.mount && isFolderPath(o.path)) {
+        out.mount = o.mount;
+        out.path = o.path;
+        if (typeof o.folder === 'string') out.folder = o.folder;
+      }
+      return out;
+    }
     if (o.kind === 'faustmodular' && typeof o.document === 'string' && typeof o.file === 'string' && /^[^/\\]+\.dsp$/.test(o.file)) {
       const out = { kind: 'faustmodular', document: o.document, file: o.file };
       if (typeof o.scene === 'string') out.scene = o.scene;
@@ -77,16 +86,24 @@ export function parseOrigin(o) {
   return { kind: 'library' };
 }
 
+/** A path in a mounted folder : `sub/dir/echo.dsp`, of .dsp or .lib, no `..`, no empty part. */
+export function isFolderPath(path) {
+  if (typeof path !== 'string' || !/\.(dsp|lib)$/i.test(path)) return false;
+  return path.split('/').every((p) => p && p !== '.' && p !== '..' && !p.includes('\\'));
+}
+
 /** Two origins designate the same place. */
 export function sameOrigin(a, b) {
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'faustmodular') return a.document === b.document && a.file === b.file;
+  if (a.kind === 'disk') return !!a.mount && a.mount === b.mount && a.path === b.path;
   return a.kind === 'library';
 }
 
 /** The origin in words : « Library », « Disk ▸ echo.dsp », « faustmodular ▸ My scene ▸ VCO ». */
 export function describeOrigin(origin) {
   const o = parseOrigin(origin);
+  if (o.kind === 'disk' && o.mount) return `Disk ▸ ${o.folder || 'folder'}/${o.path}`;
   if (o.kind === 'disk') return o.file ? `Disk ▸ ${o.file}` : 'Disk';
   if (o.kind === 'faustmodular') return `faustmodular ▸ ${o.scene || 'scene'} ▸ ${o.resource || o.file.replace(/\.dsp$/, '')}`;
   return 'Library';

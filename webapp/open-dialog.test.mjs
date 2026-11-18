@@ -47,3 +47,12 @@ test('Open… opens where the document is', () => {
     { volume: 'faustmodular', scene: { id: 'u1', name: 'Ma scène' } });
   assert.deepEqual(startOf(null), { volume: 'library' });
 });
+
+test('the files of a mounted folder are reached by browsing it ; Open… opens in their folder', () => {
+  const docs = [doc('a', 'alone.dsp', 'disk', 1), { ...doc('b', 'echo.dsp', 'disk', 2), origin: { kind: 'disk', mount: 'm1', path: 'fx/echo.dsp' } }];
+  assert.deepEqual(documentsOf('disk', docs).map((d) => d.id), ['a']);
+  assert.deepEqual(startOf({ kind: 'disk', file: 'echo.dsp', mount: 'm1', folder: 'faust', path: 'fx/sub/echo.dsp' }),
+    { volume: 'disk', mount: { id: 'm1', name: 'faust' }, dirs: ['fx', 'sub'] });
+  assert.deepEqual(startOf({ kind: 'disk', mount: 'm1', folder: 'faust', path: 'echo.dsp' }),
+    { volume: 'disk', mount: { id: 'm1', name: 'faust' }, dirs: [] });
+});

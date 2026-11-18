@@ -106,3 +106,18 @@ test('the trash : moved, restored, emptied', () => {
   assert.deepEqual(ix.emptyTrash().map((x) => x.id), [d.id]);
   assert.equal(ix.documents.length, 0);
 });
+
+test('a file of a mounted folder : its folder and its path are its origin', async () => {
+  const { parseOrigin, sameOrigin, isFolderPath } = await import('./document-index.js');
+  const o = { kind: 'disk', file: 'echo.dsp', mount: 'm1', folder: 'faust', path: 'fx/echo.dsp' };
+  assert.deepEqual(parseOrigin(o), o);
+  assert.equal(describeOrigin(o), 'Disk ▸ faust/fx/echo.dsp');
+  assert.ok(sameOrigin(o, { kind: 'disk', mount: 'm1', path: 'fx/echo.dsp' }));
+  assert.ok(!sameOrigin(o, { kind: 'disk', mount: 'm1', path: 'echo.dsp' }));
+  // a file opened alone has no place another one could share
+  assert.ok(!sameOrigin({ kind: 'disk', file: 'a.dsp' }, { kind: 'disk', file: 'a.dsp' }));
+  assert.ok(isFolderPath('a.lib') && isFolderPath('x/y/a.dsp'));
+  assert.ok(!isFolderPath('../a.dsp') && !isFolderPath('x//a.dsp') && !isFolderPath('a.txt') && !isFolderPath(''));
+  // an unusable path : the file alone
+  assert.deepEqual(parseOrigin({ kind: 'disk', file: 'a.dsp', mount: 'm1', path: '../a.dsp' }), { kind: 'disk', file: 'a.dsp' });
+});

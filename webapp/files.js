@@ -198,13 +198,22 @@ export function nameForSession(sha) {
   return (s && s.filename) || 'patch.dsp';
 }
 
-/** The .lib documents of the Library given to the compiler, at their saved content. */
+// The .lib of the folder of the open document, when it is in a mounted folder (disk-files.js, folderLibs) :
+// before those of the Library (spec_documents.md, « Les bibliothèques .lib »).
+let folderLibs = [];
+
+export function setFolderLibs(libs) {
+  folderLibs = Array.isArray(libs) ? libs.filter((l) => l && typeof l.filename === 'string' && typeof l.code === 'string') : [];
+}
+
+/** The .lib given to the compiler : those of the folder of the open document, then the Library's, at their saved content. */
 export function libSessionsForCompile() {
-  if (!ready) return listSessions().filter((s) => isLibName(s.filename));
-  const out = [];
+  const out = folderLibs.slice();
+  const taken = new Set(out.map((l) => l.filename.toLowerCase()));
+  if (!ready) return [...out, ...listSessions().filter((s) => isLibName(s.filename) && !taken.has(s.filename.toLowerCase()))];
   for (const [name, sha] of index.libraries()) {
     const s = getSession(sha);
-    if (s) out.push({ filename: name, code: s.code });
+    if (s && !taken.has(name.toLowerCase())) out.push({ filename: name, code: s.code });
   }
   return out;
 }

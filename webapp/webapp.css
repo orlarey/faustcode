@@ -1556,3 +1556,28 @@ button.store-badge:hover:not(.error) {
     border-bottom: 1px solid rgba(147, 200, 220, 0.2);
   }
 }
+
+/* A banner that asks (app.js, showBanner) : a file of the disk changed outside while the document was modified. */
+.app-banner {
+  position: fixed;
+  left: 50%;
+  top: 3.6rem;
+  transform: translateX(-50%);
+  z-index: 1500;
+  max-width: calc(100vw - 2rem);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem 0.5rem 0.9rem;
+  border-radius: 12px;
+  background: rgba(40, 30, 18, 0.96);
+  border: 1px solid rgba(255, 190, 110, 0.55);
+  color: #ffe2bf;
+  font-size: 0.8rem;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.open-crumb-volume {
+  color: #b9d3dc;
+}
