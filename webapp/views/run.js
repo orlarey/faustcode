@@ -3,6 +3,7 @@
  * How: Compiles DSP to WebAudio, manages UI/MIDI/orbit interactions, and synchronizes run state locally and remotely.
  */
 import { OrbitUI } from '../vendor/faust-orbit-ui/index.js';
+import { codeWantsSensors, isTouchDevice, requestSensorPermission, setPlaybackAudioSession } from '../play-gate.js';
 import { TOOLTIP_TEXTS } from '../tooltip-texts.js';
 import {
   MAX_COMPILED_RUN_CACHE,
@@ -729,6 +730,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       startParamPolling();
 
       setAudioToggleState(true);
+      soundEverOn = true;
+      if (audioToggleButton) audioToggleButton.classList.remove('awaits-gesture');
       emitRunState();
     } catch (err) {
       if (isStaleRunRenderError(err)) return;
@@ -738,7 +741,12 @@ export async function render(container, { sha, runState, onRunStateChange }) {
         typeof message === 'string' &&
         message.toLowerCase().includes('audio start blocked by browser policy');
       if (isLocked) {
+        // no gesture yet in this tab : the controls stay, the speaker turns the sound on
         setAudioLocked(true);
+        cleanupAudio();
+        setAudioToggleState(false);
+        if (audioToggleButton) audioToggleButton.title = 'Sound off : click to turn it on';
+        return;
       }
       cleanupAudio();
       setAudioToggleState(false);
@@ -772,11 +780,21 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     emitRunState();
   };
 
+  if (!soundEverOn && audioToggleButton) audioToggleButton.classList.add('awaits-gesture');
+  // The speaker turns the sound on : the gesture the browser asks for (no ENTER screen any more).
+  // Its synchronous part first (iOS) : the audio context, the playback session, the motion sensors.
   audioToggleButton.addEventListener('click', async () => {
     if (audioToggleButton.disabled) return;
     if (audioRunning) {
       stopAudio();
     } else {
+      if (!audioContext) primeAudioContext();
+      setPlaybackAudioSession();
+      if (codeWantsMotion && isTouchDevice()) {
+        requestSensorPermission().then((result) => {
+          if (result === 'denied') console.warn('Motion sensors are off (permission denied) : sound only.');
+        });
+      }
       await startAudio();
     }
   });
@@ -1154,6 +1172,7 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
   }
   const codeReadStartedAt = performance.now();
   const code = await codeResponse.text();
+  codeWantsMotion = codeWantsSensors(code);
   logRunPerf('compile:readCodeText:done', codeReadStartedAt, `sha=${sha} bytes=${code.length}`);
   throwIfStaleRender(isStale);
   const modeKey = voices > 0 ? `poly:${voices}` : 'mono';
@@ -4001,6 +4020,12 @@ function stopRecording({ flush }) {
  * How: Must be called synchronously from the click handler ; the next
  * startAudio adopts it instead of creating a context outside the gesture.
  */
+// Whether the sound was ever on in this tab : until then, the speaker calls for the click that starts it.
+let soundEverOn = false;
+
+// Whether the DSP compiled last reads the motion sensors ([acc:…] / [gyr:…]) : the speaker asks for them (iOS).
+let codeWantsMotion = false;
+
 export function primeAudioContext() {
   if (primedAudioContext && primedAudioContext.state !== 'closed') return;
   const Ctx = window.AudioContext || window.webkitAudioContext;

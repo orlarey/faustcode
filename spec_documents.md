@@ -125,7 +125,7 @@ Une **ressource** d'une scène est un nom et un code ; les modules de la scène 
 
 1. **Par le crayon** d'un module dans faustmodular. faustmodular sonne `open-resource` ; un onglet faustcode ouvert répond `opened` et ouvre la ressource. Sinon, faustmodular ouvre `faustcode/?open=faustmodular:<uuid>/<Nom>` dans une fenêtre nommée `faustcode`.
 2. **Par la boîte *Ouvrir* ▸ faustmodular ▸ Ma scène ▸ VCO.dsp.**
-3. Dans les deux cas, faustcode ouvre le document dont l'origine est ce fichier, ou le crée. Il n'y a donc pas de doublon. Le document s'affiche **directement dans la vue dsp**, sans ENTER : ENTER ne sert qu'à débloquer le son.
+3. Dans les deux cas, faustcode ouvre le document dont l'origine est ce fichier, ou le crée. Il n'y a donc pas de doublon. Le document s'affiche **directement dans la vue dsp**. faustcode n'a plus d'écran ENTER (0.28.0) : le son se lance par le haut-parleur de la vue Run, et seul un lien partagé ouvert sur un téléphone garde son *Tap to play* (`spec_share_url.md`).
 4. L'en-tête montre l'origine : `VCO.dsp — faustmodular ▸ Ma scène ▸ VCO`.
 
 ## Enregistrer
@@ -281,7 +281,7 @@ Les scénarios sont vérifiés de bout en bout avec les deux applications servie
 
 **faustmodular** (avec faustcode servi sous `/faustcode/` du serveur de faustmodular ; les scénarios de `SCENE-RESOURCES-SPEC.md`)
 
-- [ ] Crayon : faustcode s'ouvre sur le code de la ressource, dans la vue dsp, sans ENTER, l'origine affichée ; un second clic ramène au même document.
+- [x] Crayon : faustcode s'ouvre sur le code de la ressource, dans la vue dsp, sans ENTER, l'origine affichée ; un second clic ramène au même document.
 - [ ] Cmd/Ctrl-S qui compile : toutes les instances sont mises à jour en place, valeurs, connexions et modulations gardées ; « VCO mis à jour (2 instances) ».
 - [ ] Cmd/Ctrl-S avec erreurs : rien n'est écrit, ● reste, les instances jouent l'ancienne version.
 - [ ] faustcode rechargé, puis faustmodular rechargé : Cmd/Ctrl-S met encore la ressource à jour, sans recliquer sur le crayon.

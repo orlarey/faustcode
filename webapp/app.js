@@ -909,6 +909,10 @@ async function renderCurrentView(targetContainer = viewContainer) {
           if (!prevAudioRunning && snapshot.audioRunning) {
             state.runGlobal.lastRunInteractionAt = now;
             markSessionUsed('run-audio-start', 2);
+            if (!state.audioUnlocked) {
+              state.audioUnlocked = true;
+              void syncState({ audioUnlocked: true });
+            }
           } else if (!snapshot.audioRunning) {
             state.runGlobal.lastRunInteractionAt = 0;
           }
@@ -1692,6 +1696,8 @@ if (shareBtn) {
 
 // The resources of the scenes of faustmodular, edited here (faustmodular-link.js) :
 // a document whose origin is a resource is saved to its file.
+// faustcode has landed on its document (init) : a resource opened before waits for it
+let booted = false;
 const modularLink = installFaustmodularLink({
   files,
   compile: async (code, name) => {
@@ -1700,7 +1706,7 @@ const modularLink = installFaustmodularLink({
     return { sha1: result.sha1, errors: r.ok ? result.errors || '' : result.error || 'compilation failed' };
   },
   openDocument: async (id) => {
-    if (!state.audioUnlocked) {
+    if (!booted) {
       pendingDocument = id;
       return;
     }
@@ -1733,7 +1739,7 @@ async function openInModular() {
   await modularLink.saveAs(code, open ? open.file.name : files.nameForSession(state.currentSha));
 }
 
-// A resource to open once the audio gate is passed (?open=faustmodular:…, boot.js), or a document of
+// A resource to open once faustcode has landed (?open=faustmodular:…, boot.js), or a document of
 // faustmodular opened meanwhile.
 let pendingResource = null;
 let pendingDocument = null;
@@ -1742,6 +1748,7 @@ export function openResourceAfterGate(resource) {
 }
 
 async function openPendingResource() {
+  booted = true;
   if (pendingResource && modularLink) {
     const { document, file } = pendingResource;
     pendingResource = null;
@@ -1799,14 +1806,8 @@ async function pollState() {
     if (remote.updatedAt <= lastStateTs) return;
 
     lastStateTs = remote.updatedAt;
-    if (typeof remote.audioUnlocked === 'boolean') {
-      state.audioUnlocked = remote.audioUnlocked;
-      if (state.audioUnlocked) {
-        hideAudioGate();
-      } else {
-        showAudioGate();
-      }
-    }
+    // no ENTER screen : the sound is unlocked by the speaker of the Run view, noted here
+    if (typeof remote.audioUnlocked === 'boolean') state.audioUnlocked = remote.audioUnlocked;
     if (remote.view && getEffectiveView(remote.view) !== state.currentView) {
       const now = Date.now();
       if (now < localViewStickyUntil) {
@@ -2791,15 +2792,32 @@ async function init() {
 
   state.sessionIndex = state.sessions.length;
   updateSessionNavigation();
-  hideInterface();
-  await prepareAudioGate();
-  showAudioGate();
+  // No ENTER screen : faustcode opens on its document (a shared link, a resource of faustmodular, the last
+  // document). The sound starts in the Run view, by its speaker : the gesture the browser asks for. Only a
+  // shared link opened on a phone keeps its « Tap to play » (spec_share_url.md) : the sound and the motion
+  // sensors in one tap.
   state.audioUnlocked = false;
-  await startShowcasePreview();
-
-  // Require explicit audio unlock per opened tab (unless ENTER was already
-  // clicked while the showcase was being prepared).
+  const share = peekShareIntent();
+  if (share && share.sha1 && isTouchDevice()) {
+    hideInterface();
+    await prepareAudioGate();
+    showAudioGate();
+    syncState({ audioUnlocked: false });
+    return finishInit();
+  }
+  try {
+    const notice = await landOnEntrySession();
+    if (notice) showError(notice);
+  } catch (err) {
+    showError(`Error: ${err && err.message ? err.message : err}`);
+  }
+  showPendingStore();
+  await openPendingResource();
   syncState({ audioUnlocked: state.audioUnlocked });
+  return finishInit();
+}
+
+async function finishInit() {
 
   // Load Faust compiler version for footer.
   if (footerVersion) {

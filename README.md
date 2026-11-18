@@ -26,6 +26,11 @@ don't have to fight Chrome's ES module cache while iterating.
 
 ## Quick tour
 
+- faustcode opens straight on its document (the last one, a shared link, a
+  resource of faustmodular) : there is no welcome screen any more (0.28.0).
+  The sound starts with the speaker of the Run view, the gesture the browser
+  asks for ; it calls softly until the first click. A shared link opened on a
+  phone keeps its *Tap to play* (the sound and the motion sensors in one tap).
 - Drop a `.dsp` file anywhere on the page, or paste Faust code into the
   empty-state pane.
 - The header dropdown switches between five views :

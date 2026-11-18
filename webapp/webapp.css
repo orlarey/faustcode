@@ -1051,6 +1051,15 @@ ul#setup-other-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.75rem
 }
 
 .run-audio-speaker.is-on { color: #6effc2; }
+/* the sound never on in this tab : the speaker calls, softly, for the click that starts it */
+.run-audio-speaker.awaits-gesture { animation: run-speaker-call 1.8s ease-in-out infinite; }
+@keyframes run-speaker-call {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 143, 143, 0); }
+  50% { box-shadow: 0 0 0 4px rgba(255, 143, 143, 0.28); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-audio-speaker.awaits-gesture { animation: none; box-shadow: 0 0 0 2px rgba(255, 143, 143, 0.35); }
+}
 .run-audio-speaker.is-off { color: #ff8f8f; }
 .run-audio-speaker.is-on .run-speaker-off,
 .run-audio-speaker.is-off .run-speaker-on { display: none; }
