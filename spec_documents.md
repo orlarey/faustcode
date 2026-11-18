@@ -295,7 +295,7 @@ Les scénarios sont vérifiés de bout en bout avec les deux applications servie
 **Disque, magasins, MCP, migration**
 
 - [ ] (À la main, Chromium) Ouvrir un fichier du disque, Enregistrer, le fichier est réécrit ; après un rechargement, la permission est redemandée.
-- [ ] (À la main) Monter un dossier, ouvrir un `.dsp` qui importe un `.lib` du même dossier : il compile.
+- [x] Monter un dossier, ouvrir un `.dsp` qui importe un `.lib` du même dossier : il compile ; un changement externe est rechargé, ou le bandeau (vérifié avec un dossier du stockage privé, qui a la même interface ; le sélecteur natif, à la main).
 - [ ] Ouvrir un module d'un magasin : un document avec sa provenance ; le rouvrir ne crée rien ; Publish inchangé.
 - [ ] MCP : `submit` puis `get_document` ; un ancien `set_session(sha1)` ouvre le bon document.
 - [ ] Migration d'une OPFS de 0.25 : chaque fichier devient un document, avec son contenu courant et son brouillon ; `legacy/` contient les anciennes données ; un second démarrage ne fait rien.

@@ -57,7 +57,8 @@ don't have to fight Chrome's ES module cache while iterating.
   as… (`Shift-Cmd/Ctrl-S`), Revert to saved, Rename…, Move to trash and
   Stores…. **Open…** (0.27.0) is one dialog over the volumes : the
   Library (the documents of the browser, searched, and the trash), the
-  Disk (Open a file of the device… ; in Chromium, Save writes it back),
+  Disk (Open a file of the device… ; in Chromium, Save writes it back ;
+  and the mounted folders, 0.29.0, see below),
   the Stores (their modules, searched) and faustmodular (its scenes, then
   their resources). A click on the origin in the header opens it where the
   document is. **Revert to saved** drops the working copy (●).
@@ -259,6 +260,20 @@ same way.
 The **faustmodular** button sends the document to the last scene opened in
 faustmodular, as a new resource with an instance (a new document, linked to
 it) ; for a document of faustmodular, it saves it. `webapp/faustmodular-link.js`.
+
+## Folders of the disk
+
+In Chromium, Open… ▸ Disk ▸ **Mount a folder…** adds a folder of your
+computer to faustcode (it stays mounted after a reload ; the browser asks
+again for the permission to read it, at the first click). Open… browses it,
+its sub-folders, its `.dsp` and `.lib` ; a file opens **in place** : Save
+writes it, and only if it was not changed outside since it was read (else it
+asks). `import` and `library("foo.lib")` find the `.lib` of the document's
+folder first, then the Library's, then Faust's. When you come back to the
+page, a file changed outside (another editor, git) is reloaded ; if you have
+unsaved changes, a banner offers *Reload* or *Keep mine* (the next Save
+overwrites it). A folder whose document is open cannot be unmounted.
+`webapp/disk-files.js`.
 
 ## Documents
 
